@@ -140,6 +140,111 @@ export type BenchmarkRun = {
   updated_at: string;
 };
 
+export type Dataset = {
+  id: string;
+  name: string;
+  source: string;
+  status: string;
+  item_count: number | null;
+  content_hash: string | null;
+  snapshot_hash: string | null;
+  content_retained: boolean;
+  format: string | null;
+  prompt_field: string | null;
+  expected_answer_field: string | null;
+  row_limit: number | null;
+  shuffle_seed: number | null;
+  prompt_sizing_method: string | null;
+  tokenizer_identity: string | null;
+  count_method: string | null;
+  duplicate_count: number;
+  redacted_summary: string | null;
+};
+
+export type DatasetImportResponse = {
+  dataset: Dataset;
+  preview: Array<{
+    row_number: number;
+    prompt_preview: string;
+    prompt_size: number | null;
+    expected_answer_present: boolean;
+  }>;
+  parsed_rows: number;
+  selected_rows: number;
+  duplicate_rows: number;
+  rows_excluded_by_limit: number;
+  count_method: string;
+};
+
+export type Workload = {
+  id: string;
+  name: string;
+  kind: "chat" | "completion";
+  status: "draft" | "ready" | "invalid";
+  input_mode: "dataset" | "synthetic";
+  dataset_id: string | null;
+  preset: string | null;
+  request_count: number | null;
+  duration_seconds: number | null;
+  concurrency: number;
+  concurrency_levels: number[];
+  traffic_mode: "closed_loop" | "open_loop";
+  arrival_rate_per_second: number | null;
+  warmup_count: number;
+  target_input_tokens: number | null;
+  target_output_tokens: number | null;
+  max_output_tokens: number;
+  prompt_sizing_method: "characters" | "words" | "tokenizer";
+  random_seed: number;
+  sampling_config: Record<string, string | number | boolean | null>;
+};
+
+export type WorkloadInput = Omit<Workload, "id" | "status" | "concurrency_levels"> & {
+  concurrency_levels: number[];
+};
+
+export type BenchmarkPlan = {
+  id: string;
+  name: string;
+  status: "draft" | "ready" | "blocked";
+  machine_profile_id: string | null;
+  engine_profile_id: string;
+  model_artifact_id: string | null;
+  workload_id: string;
+  warmup_requests: number;
+  measured_requests: number | null;
+  measurement_duration_seconds: number | null;
+  concurrency: number;
+  timeout_seconds: number;
+  retain_prompt_output: boolean;
+  dataset_snapshot_hash: string | null;
+  configuration_snapshot: Record<string, unknown>;
+};
+
+export type PreflightIssue = { code: string; message: string };
+export type BenchmarkPreflight = {
+  valid: boolean;
+  target: Record<string, unknown>;
+  workload: Record<string, unknown> | null;
+  supported_options: string[];
+  unknown_options: string[];
+  unsupported_options: string[];
+  missing_prerequisites: string[];
+  estimated_duration_seconds: number | null;
+  estimated_request_volume: number | null;
+  resource_contention: string[];
+  remote_data_egress: {
+    code: string;
+    host: string;
+    message: string;
+    request_will_be_sent: boolean;
+  } | null;
+  blockers: PreflightIssue[];
+  warnings: PreflightIssue[];
+};
+
+export type BenchmarkPlanResponse = { plan: BenchmarkPlan; preflight: BenchmarkPreflight };
+
 export type EngineProfileInput = {
   label: string;
   adapter_id: string;
@@ -157,6 +262,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string | null = null,
     readonly host: string | null = null,
+    readonly fieldErrors: Record<string, string> = {},
   ) {
     super(message);
     this.name = "ApiError";
@@ -200,7 +306,8 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
+  if (init.body !== undefined && !(init.body instanceof FormData))
+    headers.set("Content-Type", "application/json");
   if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
     headers.set("X-LOCALFORGE-SESSION", await readSessionToken());
   }
@@ -217,22 +324,38 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     let message = `The local API returned an error (${response.status}).`;
     let code: string | null = null;
     let host: string | null = null;
+    const fieldErrors: Record<string, string> = {};
     try {
       const payload: unknown = await response.json();
       const detail =
         typeof payload === "object" && payload !== null
           ? (payload as { detail?: unknown }).detail
           : null;
-      if (typeof detail === "object" && detail !== null) {
+      if (Array.isArray(detail)) {
+        for (const issue of detail) {
+          if (typeof issue !== "object" || issue === null) continue;
+          const value = issue as { loc?: unknown; msg?: unknown };
+          if (!Array.isArray(value.loc) || typeof value.msg !== "string") continue;
+          const field = value.loc.filter((part): part is string => typeof part === "string").at(-1);
+          if (field) fieldErrors[field] = value.msg;
+        }
+        message = "Some workload settings need attention.";
+      } else if (typeof detail === "object" && detail !== null) {
         const record = detail as { message?: unknown; code?: unknown; host?: unknown };
         if (typeof record.message === "string") message = record.message;
         if (typeof record.code === "string") code = record.code;
         if (typeof record.host === "string") host = record.host;
+        const fields = (detail as { fields?: unknown }).fields;
+        if (Array.isArray(fields) && typeof record.message === "string") {
+          for (const field of fields) {
+            if (typeof field === "string") fieldErrors[field.split(".").at(-1)!] = record.message;
+          }
+        }
       }
     } catch {
       // Keep the bounded status message if the API response is not JSON.
     }
-    throw new ApiError(message, response.status, code, host);
+    throw new ApiError(message, response.status, code, host, fieldErrors);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -251,6 +374,9 @@ export const listEngineProfiles = () => apiRequest<EngineProfile[]>("/api/v1/eng
 export const fetchSystemProfile = () => apiRequest<MachineProfile>("/api/v1/system");
 export const listMachineProfiles = () => apiRequest<MachineProfile[]>("/api/v1/machine-profiles");
 export const listRuns = () => apiRequest<BenchmarkRun[]>("/api/v1/runs?limit=10");
+export const listDatasets = () => apiRequest<Dataset[]>("/api/v1/datasets");
+export const listWorkloads = () => apiRequest<Workload[]>("/api/v1/workloads");
+export const listBenchmarkPlans = () => apiRequest<BenchmarkPlan[]>("/api/v1/benchmark-plans");
 export const listEngineModels = (id: string) =>
   apiRequest<EngineModel[]>(`/api/v1/engines/${id}/models`);
 
@@ -279,8 +405,83 @@ export const probeEngineProfile = (id: string, confirmRemoteEgress: boolean) =>
     body: JSON.stringify({ confirm_remote_egress: confirmRemoteEgress }),
   });
 
+export const enableEngineProfile = (id: string) =>
+  apiRequest<EngineProfile>(`/api/v1/engines/${id}/enable`, { method: "POST", body: "{}" });
+
 export const deleteEngineProfile = (id: string) =>
   apiRequest<void>(`/api/v1/engines/${id}`, { method: "DELETE" });
 
 export const saveCurrentMachineProfile = () =>
   apiRequest<MachineProfile>("/api/v1/machine-profiles/current", { method: "PUT", body: "{}" });
+
+export const importDataset = (
+  file: File,
+  options: {
+    name: string;
+    format: "jsonl" | "csv";
+    promptField: string;
+    expectedAnswerField: string;
+    rowLimit: number;
+    shuffleSeed: number;
+    promptSizingMethod: "characters" | "words" | "tokenizer";
+    tokenizerName: string;
+    retainContent: boolean;
+  },
+) => {
+  const body = new FormData();
+  body.set("file", file);
+  body.set("name", options.name);
+  body.set("format", options.format);
+  body.set("prompt_field", options.promptField);
+  if (options.expectedAnswerField) body.set("expected_answer_field", options.expectedAnswerField);
+  body.set("row_limit", String(options.rowLimit));
+  body.set("shuffle_seed", String(options.shuffleSeed));
+  body.set("prompt_sizing_method", options.promptSizingMethod);
+  if (options.tokenizerName) body.set("tokenizer_name", options.tokenizerName);
+  body.set("retain_content", String(options.retainContent));
+  return apiRequest<DatasetImportResponse>("/api/v1/datasets/import", { method: "POST", body });
+};
+
+export const createWorkload = (input: WorkloadInput) =>
+  apiRequest<Workload>("/api/v1/workloads", { method: "POST", body: JSON.stringify(input) });
+
+export const replayWorkload = (id: string) =>
+  apiRequest<Workload>(`/api/v1/workloads/${id}/replay`, { method: "POST", body: "{}" });
+
+export const preflightBenchmarkPlan = (input: {
+  name: string;
+  engine_profile_id: string;
+  machine_profile_id: string | null;
+  model_artifact_id: string;
+  workload_id: string;
+  retain_prompt_output: boolean;
+}) =>
+  apiRequest<BenchmarkPreflight>("/api/v1/benchmark-plans/preflight", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const createBenchmarkPlan = (input: {
+  name: string;
+  engine_profile_id: string;
+  machine_profile_id: string | null;
+  model_artifact_id: string;
+  workload_id: string;
+  retain_prompt_output: boolean;
+}) =>
+  apiRequest<BenchmarkPlanResponse>("/api/v1/benchmark-plans", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const preflightSavedPlan = (id: string) =>
+  apiRequest<BenchmarkPreflight>(`/api/v1/benchmark-plans/${id}/preflight`, {
+    method: "POST",
+    body: "{}",
+  });
+
+export const startBenchmarkRun = (planId: string, overrideContention = false) =>
+  apiRequest<{ run: BenchmarkRun; conflicting_resources: string[] }>("/api/v1/runs", {
+    method: "POST",
+    body: JSON.stringify({ plan_id: planId, override_contention: overrideContention }),
+  });
