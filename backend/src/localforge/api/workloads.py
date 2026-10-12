@@ -1,6 +1,7 @@
 """Local workload, dataset, and benchmark-plan preflight routes."""
 
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -625,12 +626,17 @@ def _preflight(
         if workload.duration_seconds is not None:
             duration = workload.duration_seconds * sweep_iterations
             if workload.traffic_mode is TrafficMode.OPEN_LOOP and workload.arrival_rate_per_second:
-                offered = int(
-                    workload.duration_seconds * workload.arrival_rate_per_second + 0.999999
+                offered = math.ceil(
+                    workload.duration_seconds * workload.arrival_rate_per_second
                 )
                 measured_volume = (
                     min(measured_volume, offered) if measured_volume is not None else offered
                 )
+                if workload.request_count is not None:
+                    duration = min(
+                        workload.duration_seconds,
+                        workload.request_count / workload.arrival_rate_per_second,
+                    ) * sweep_iterations
             if measured_volume is not None:
                 volume = (measured_volume + workload.warmup_count) * sweep_iterations
         elif (
