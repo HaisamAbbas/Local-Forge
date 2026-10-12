@@ -317,7 +317,11 @@ export function WorkloadsScreen() {
 
   function onEngineChange(event: ChangeEvent<HTMLSelectElement>) {
     const engine = data?.engines.find((item) => item.id === event.target.value);
-    setForm((current) => ({ ...current, engineId: event.target.value, modelId: "" }));
+    setForm((current) =>
+      current.engineId === event.target.value
+        ? current
+        : { ...current, engineId: event.target.value, modelId: "" },
+    );
     if (engine)
       setFieldErrors((current) => {
         const next = { ...current };
@@ -1531,7 +1535,7 @@ export function WorkloadsScreen() {
                 <p className="success-message workload-run-created" role="status">
                   Run queued: <code>{runId}</code>
                   {runContended ? " and marked potentially contended" : ""}.{" "}
-                  <a href="#runs">Open run history</a>.
+                  <a href={`#runs?run=${encodeURIComponent(runId)}`}>Open live run details</a>.
                 </p>
               )}
               <div className="workload-actions workload-review-actions">

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
+import { RunsScreen } from "./components/RunsScreen";
 import { WorkloadsScreen } from "./components/WorkloadsScreen";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
 
@@ -40,17 +41,30 @@ const navigation = [
 
 type ScreenId = (typeof navigation)[number]["id"];
 
-function screenFromHash(): ScreenId {
-  const hash = window.location.hash.slice(1);
-  return navigation.some((item) => item.id === hash) ? (hash as ScreenId) : "overview";
+function locationFromHash(): { screen: ScreenId; runId: string | null } {
+  const [hashScreen, query = ""] = window.location.hash.slice(1).split("?", 2);
+  const screen = navigation.some((item) => item.id === hashScreen)
+    ? (hashScreen as ScreenId)
+    : "overview";
+  const requestedRunId = new URLSearchParams(query).get("run");
+  const runId =
+    screen === "runs" &&
+    requestedRunId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      requestedRunId,
+    )
+      ? requestedRunId
+      : null;
+  return { screen, runId };
 }
 
 export function App() {
-  const [activeScreen, setActiveScreen] = useState<ScreenId>(screenFromHash);
+  const [location, setLocation] = useState(locationFromHash);
+  const activeScreen = location.screen;
   const currentScreen = navigation.find((item) => item.id === activeScreen) ?? navigation[0]!;
 
   useEffect(() => {
-    const updateScreen = () => setActiveScreen(screenFromHash());
+    const updateScreen = () => setLocation(locationFromHash());
     window.addEventListener("hashchange", updateScreen);
     return () => window.removeEventListener("hashchange", updateScreen);
   }, []);
@@ -119,6 +133,13 @@ export function App() {
             <SystemScreen />
           ) : activeScreen === "workloads" ? (
             <WorkloadsScreen />
+          ) : activeScreen === "runs" ? (
+            <RunsScreen
+              selectedRunId={location.runId}
+              onSelectRun={(id) => {
+                window.location.hash = id ? `runs?run=${encodeURIComponent(id)}` : "runs";
+              }}
+            />
           ) : (
             <SectionEmptyState label={currentScreen.label} />
           )}
