@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-7 are implemented and verified; Prompt 8 is next.
+**Status:** Prompts 0-10 are implemented and verified; Prompt 11 is next.
 **Reviewed:** 12 October 2026  
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -397,3 +397,41 @@ Frontend, from `frontend/` (no frontend files changed in this phase):
 - `npm run e2e` — passed (1 Chromium smoke test).
 
 Repository diff check: `git diff --check` — passed. No external engine or model download was required.
+
+## Prompt 10 completion record
+
+### Delivered
+
+- Added persistent run history and hash-addressable run details, including direct navigation from a newly launched workload.
+- Added live lifecycle updates over resumable persisted events, automatic reconnection, immediate cancellation controls, and terminal-state refresh without manual reload.
+- Added request counts, elapsed time, client-observed latency and throughput, source-labeled metric tables, resource-telemetry availability, warnings, and the latest 100 event rows. Chart values are not interpolated; an accessible table lists the latest 500 points and total observed sample count.
+- Added plan configuration fingerprints and run-start snapshots for engine version/capabilities and machine hardware provenance. Secret references and engine configuration are not copied into the run snapshot.
+- Kept request/output bodies out of the run UI and event payloads. Run details distinguish retained-content opt-in from the default no-body retention policy.
+- Added frontend event/sample reconciliation tests, a fake-engine E2E workflow covering live completion, reload, history navigation, cancellation, and body redaction, plus a backend test for captured profile provenance.
+
+### Scope and limitations
+
+- Only the deterministic fake adapter is currently available for execution; its timings are pipeline checks, not model performance results.
+- Host CPU/GPU/memory/power sampling is not implemented. The detail view reports whether the worker emitted resource telemetry and preserves unavailable values as unavailable.
+- Run history displays the latest 100 records. Request samples and terminal event history restore through pages, so opening very large runs can take longer than opening small runs. The frontend retains only bounded sample and event detail while aggregating request counts as pages arrive.
+- Terminal runs stop their live polling timer. The event timeline keeps its latest 100 rows while preserving the most recent system-telemetry event separately.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run ruff format --check src tests` — passed.
+- `uv run ruff check src tests` — passed.
+- `uv run mypy src` — passed (32 source files).
+- `uv run pytest` — passed (117 tests).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` — passed.
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm run test` — passed (25 tests).
+- `npm run build` — passed.
+- `npm run e2e` — passed (4 Chromium tests); Prompt 10 cancellation scenario also passed in isolation.
+
+Repository diff check: `git diff --check` — passed.
