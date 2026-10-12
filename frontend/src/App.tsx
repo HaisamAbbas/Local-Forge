@@ -1,13 +1,19 @@
 import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
+import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
 
 const navigation = [
   { id: "overview", label: "Overview", description: "Your local inference workspace." },
   {
     id: "engines",
     label: "Engines",
-    description: "Connect local or explicitly selected inference engines.",
+    description: "Review installed adapters and manage engine connection profiles.",
+  },
+  {
+    id: "system",
+    label: "System",
+    description: "Inspect detected machine details and their sources.",
   },
   {
     id: "workloads",
@@ -105,39 +111,17 @@ export function App() {
           </div>
 
           {activeScreen === "overview" ? (
-            <OverviewEmptyState />
+            <OverviewScreen />
+          ) : activeScreen === "engines" ? (
+            <EnginesScreen />
+          ) : activeScreen === "system" ? (
+            <SystemScreen />
           ) : (
             <SectionEmptyState label={currentScreen.label} />
           )}
         </main>
       </div>
     </div>
-  );
-}
-
-function OverviewEmptyState() {
-  return (
-    <section className="welcome-panel" aria-labelledby="welcome-title">
-      <div className="panel-accent" aria-hidden="true" />
-      <div className="welcome-copy">
-        <p className="eyebrow">READY WHEN YOU ARE</p>
-        <h2 id="welcome-title">Measure inference on your machine.</h2>
-        <p>
-          Connect an inference engine, choose a workload, and compare measured results. The
-          dashboard and control service run locally; remote targets are always a deliberate choice.
-        </p>
-      </div>
-      <div className="empty-state-row">
-        <span className="empty-state-icon" aria-hidden="true">
-          01
-        </span>
-        <div>
-          <h3>No benchmark runs yet</h3>
-          <p>This workspace has no measurements. Connect an engine to begin an experiment.</p>
-        </div>
-        <span className="empty-state-tag">EMPTY WORKSPACE</span>
-      </div>
-    </section>
   );
 }
 
