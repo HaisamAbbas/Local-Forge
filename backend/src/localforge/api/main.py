@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
@@ -27,6 +28,85 @@ from localforge.security.local_session import (
 )
 from localforge.storage.database import initialize_database
 from localforge.storage.paths import default_data_directory
+
+MAX_DATASET_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+
+
+class DatasetUploadBodyLimitMiddleware:
+    """Bound multipart bytes before FastAPI spools uploaded files to temporary storage."""
+
+    def __init__(self, app: ASGIApp, *, max_upload_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_upload_bytes + MAX_DATASET_MULTIPART_OVERHEAD_BYTES
+        self.error_body = JSONResponse(
+            status_code=413,
+            content={
+                "detail": {
+                    "code": "dataset_too_large",
+                    "message": "Dataset upload exceeds the configured request-size limit.",
+                }
+            },
+        ).body
+        self.error_headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(self.error_body)).encode("ascii")),
+        ]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/api/v1/datasets/import"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_body_bytes:
+                    await self._send_error(send)
+                    return
+            except ValueError:
+                pass
+
+        received_bytes = 0
+        exceeded = False
+        error_sent = False
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes, exceeded
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self.max_body_bytes:
+                    exceeded = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def limited_send(message: Message) -> None:
+            nonlocal error_sent
+            if exceeded:
+                if not error_sent and message["type"] == "http.response.start":
+                    error_sent = True
+                    await self._send_error(send)
+                return
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, limited_send)
+        except Exception:
+            if not exceeded:
+                raise
+        if exceeded and not error_sent:
+            await self._send_error(send)
+
+    async def _send_error(self, send: Send) -> None:
+        await send(
+            {"type": "http.response.start", "status": 413, "headers": self.error_headers}
+        )
+        await send({"type": "http.response.body", "body": self.error_body})
 
 
 @dataclass(frozen=True)
@@ -198,6 +278,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     application.include_router(profile_router)
     application.include_router(workload_router)
+    application.add_middleware(
+        DatasetUploadBodyLimitMiddleware,
+        max_upload_bytes=app_settings.max_dataset_upload_bytes,
+    )
 
     return application
 
