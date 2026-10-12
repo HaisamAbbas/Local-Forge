@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0–3 complete and verified; Prompt 4 backend work is in progress.  
+**Status:** Prompts 0-6 are implemented and verified; Prompt 7 is next.
 **Reviewed:** 12 October 2026  
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -312,4 +312,49 @@ Backend, from `backend/`:
 - Profile and machine screens are still empty states; the user-facing flows are scheduled in Prompt 8.
 - Credential references are validated and masked, but OS credential-store read/write integration is not implemented.
 - Managed lifecycle currently exercises only the fake adapter and does not launch an operating-system process.
-- No real inference endpoint adapter or benchmark execution path is available yet.
+- No real inference endpoint adapter is available yet. Prompt 6 adds execution through the deterministic fake adapter only.
+
+## Prompt 5 completion record
+
+### Delivered
+
+- Added deterministic workload and preset APIs, validated JSONL/CSV dataset ingestion, optional content-addressed prompt snapshots, and benchmark-plan preflight with blockers, warnings, and egress disclosure.
+- Saved plan configuration includes the workload and dataset snapshot identifiers; runs can recheck the retained snapshot before consuming it.
+- Added limits for upload bodies, parsed rows, request volume, concurrency, and dataset retention. Prompts remain unretained by default.
+- The workload and preflight API behavior is covered in `backend/tests/test_workload_api.py` and dataset import tests.
+
+## Prompt 6 completion record
+
+### Delivered
+
+- Added schema migrations 3 and 4 for ordered run events, process leases, resource locks, and persisted event contract versions.
+- Added a legal run state machine, atomic resource acquisition with explicit contention override, heartbeat expiry reconciliation, startup interruption recovery, and terminal lock release.
+- Added `POST/GET /api/v1/runs`, cancellation, samples, event history, and resumable Server-Sent Events. Events have stable per-run sequence IDs and monotonic offsets; prompt/output bodies and credential fields are rejected from event payloads.
+- Starting a run persists it before launching a separately owned `localforge.worker` process. Worker shutdown and stale-worker cleanup target only that recorded child process; managed engine lifecycle handles remain separate.
+- Implemented deterministic fake-adapter request execution, bounded concurrency, bounded cancellation drain, request outcomes/samples, sanitized normalized events, and a warning when an adapter cannot cancel an in-flight request.
+- Added tests for illegal transitions, event ordering/replay/redaction, lease expiry, app restart recovery, fake-adapter cancellation, child-process execution/death, lock override, and SSE heartbeat/disconnect.
+
+### Scope and limitations
+
+- The worker currently loads the built-in fake adapter. It verifies coordinator behavior but does not contact a model or produce valid inference performance results. Adapter plugin loading and real-engine requests remain later phases.
+- Host system sampling is explicitly unavailable in the current `system_sample` event. Prompt 7 owns measured resource telemetry and metric formulas.
+- The worker caps concurrent request tasks at 128 and emits a warning when a plan requests more. This is a bounded execution guard, not a claim that the requested concurrency was achieved.
+- The dashboard is not yet connected to run APIs; live run UI is scheduled for Prompt 10.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` — passed.
+- `uv run --locked ruff check src tests` — passed.
+- `uv run --locked mypy src` — passed (31 source files).
+- `uv run --locked pytest -q` — passed (94 tests).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` — passed.
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm run test` — passed (2 tests).
+- `npm run build` — passed.
+- `npm run e2e` — passed (1 Chromium smoke test).

@@ -2,17 +2,19 @@
 
 LOCALFORGE is a local-first workbench for measuring and comparing LLM inference engines. The
 dashboard and control API run on the evaluator's machine and bind to loopback during development.
-Requests will go to the selected inference engine. Remote endpoint probes require explicit
-confirmation through the local API; real model requests and inference adapters are not implemented
-yet.
+Requests go from that machine to the selected inference engine. Remote endpoint probes require
+explicit confirmation through the local API; remote inference requests use the configured endpoint.
 
 The local UI shell, API, typed data contracts, SQLite persistence, and machine/engine profile APIs
 are in place. The API supports deterministic workload definitions, bounded JSONL/CSV dataset
 validation, optional hash-addressed local dataset retention, and benchmark-plan preflight. The
 adapter catalog currently includes a deterministic fake engine for exercising the integration
-boundary; it does not load a model or produce inference performance measurements. The dashboard is
-not yet wired to these APIs. The workload screens, real engine adapters, and benchmark execution
-arrive in subsequent implementation phases. Ordinary checks do not download models.
+boundary; it does not load a model or produce inference performance measurements. Saved plans can
+run in a separate worker process, with lifecycle transitions, request samples, resource locks,
+cancellation, and replayable sanitized events persisted locally. The dashboard is not yet wired to
+these APIs, and fake-adapter timing must not be treated as model performance. Real inference
+adapters and the API-backed dashboard arrive in later phases. Ordinary checks do not download
+models.
 
 ## Requirements
 
@@ -56,6 +58,12 @@ through `/api/v1/workloads` or `/api/v1/workloads/presets`; JSONL and CSV datase
 `/api/v1/datasets/import` using a multipart upload. Dataset prompt bodies are retained only when the
 import explicitly opts in. Benchmark plans report blockers and warnings at
 `/api/v1/benchmark-plans/preflight` and save the selected dataset snapshot hash with the plan.
+Start a saved plan with `POST /api/v1/runs` and its `plan_id`; read run state, samples, and events at
+`/api/v1/runs/{run_id}`, `/samples`, and `/events`. Event history supports sequence-cursor replay or
+Server-Sent Events at `/api/v1/runs/{run_id}/events/stream`. Cancel an active run with
+`POST /api/v1/runs/{run_id}/cancel`. Resource collisions return `409`; retry with
+`override_contention: true` only after reviewing the warning. Events never contain request bodies;
+samples retain prompt and output text only when the saved plan explicitly enables retention.
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:
@@ -75,7 +83,7 @@ Set-Location backend
 uv run localforge-worker --check
 ```
 
-This foundation release does not yet schedule benchmark jobs in the worker.
+The worker can be checked independently and is also started automatically for each accepted run.
 
 ## Checks
 
