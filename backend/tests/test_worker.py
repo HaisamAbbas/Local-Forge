@@ -31,5 +31,5 @@ def test_worker_check_runs_in_a_separate_process() -> None:
     assert json.loads(result.stdout) == {
         "status": "ready",
         "worker_protocol_version": 1,
-        "job_execution": "not_configured",
+        "job_execution": "configured",
     }
