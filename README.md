@@ -7,11 +7,12 @@ confirmation through the local API; real model requests and inference adapters a
 yet.
 
 The local UI shell, API, typed data contracts, SQLite persistence, and machine/engine profile APIs
-are in place. The adapter catalog currently includes a deterministic fake engine for exercising the
-integration boundary; it does not load a model or produce inference performance measurements. The
-dashboard is not yet wired to the profile APIs. Real engine adapters, workload creation, and
-benchmark execution arrive in subsequent implementation phases. Ordinary checks do not download
-models.
+are in place. The API supports deterministic workload definitions, bounded JSONL/CSV dataset
+validation, optional hash-addressed local dataset retention, and benchmark-plan preflight. The
+adapter catalog currently includes a deterministic fake engine for exercising the integration
+boundary; it does not load a model or produce inference performance measurements. The dashboard is
+not yet wired to these APIs. The workload screens, real engine adapters, and benchmark execution
+arrive in subsequent implementation phases. Ordinary checks do not download models.
 
 ## Requirements
 
@@ -50,6 +51,11 @@ npm run dev
 Open `http://127.0.0.1:5173`. The API health response is available at
 `http://127.0.0.1:8000/health` and `http://127.0.0.1:8000/api/v1/health`. The registered adapter
 manifest catalog is available at `http://127.0.0.1:8000/api/v1/engines/catalog`.
+The interactive API reference is available at `http://127.0.0.1:8000/docs`. Workloads can be saved
+through `/api/v1/workloads` or `/api/v1/workloads/presets`; JSONL and CSV datasets are imported at
+`/api/v1/datasets/import` using a multipart upload. Dataset prompt bodies are retained only when the
+import explicitly opts in. Benchmark plans report blockers and warnings at
+`/api/v1/benchmark-plans/preflight` and save the selected dataset snapshot hash with the plan.
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:
@@ -57,6 +63,10 @@ different directory for local development, set `LOCALFORGE_DATA_DIR` before star
 ```powershell
 $env:LOCALFORGE_DATA_DIR = Join-Path (Get-Location) ".localforge"
 ```
+
+Dataset uploads are limited to 100 MiB by default. Set `LOCALFORGE_MAX_DATASET_UPLOAD_BYTES` to a
+positive byte count to change the limit. Retained dataset snapshots are stored under the configured
+LOCALFORGE data directory in `datasets/`.
 
 The process boundary can be checked independently from the API:
 

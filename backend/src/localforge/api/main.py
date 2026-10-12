@@ -1,5 +1,6 @@
 """FastAPI application factory and initial health route."""
 
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
 from localforge.adapters.contracts import AdapterManifest
 from localforge.api.profiles import router as profile_router
 from localforge.api.schemas import LocalSessionResponse
+from localforge.api.workloads import router as workload_router
 from localforge.security.local_session import (
     SESSION_HEADER_NAME,
     create_local_session_token,
@@ -34,10 +36,25 @@ class AppSettings:
     data_directory: Path
     adapter_catalog_factory: Callable[[], AdapterCatalog] = default_adapter_catalog
     session_token_factory: Callable[[], str] = create_local_session_token
+    max_dataset_upload_bytes: int = 100 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if self.max_dataset_upload_bytes < 1:
+            raise ValueError("max_dataset_upload_bytes must be a positive integer")
 
     @classmethod
     def from_environment(cls) -> "AppSettings":
-        return cls(data_directory=default_data_directory())
+        raw_limit = os.environ.get("LOCALFORGE_MAX_DATASET_UPLOAD_BYTES", str(100 * 1024 * 1024))
+        try:
+            maximum_upload_bytes = int(raw_limit)
+        except ValueError as error:
+            raise ValueError(
+                "LOCALFORGE_MAX_DATASET_UPLOAD_BYTES must be a positive integer"
+            ) from error
+        return cls(
+            data_directory=default_data_directory(),
+            max_dataset_upload_bytes=maximum_upload_bytes,
+        )
 
 
 class DatabaseHealth(BaseModel):
@@ -64,6 +81,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         adapter_catalog = app_settings.adapter_catalog_factory()
         application.state.database_schema_version = schema_version
         application.state.database_path = database_path
+        application.state.data_directory = app_settings.data_directory
+        application.state.max_dataset_upload_bytes = app_settings.max_dataset_upload_bytes
         application.state.adapter_catalog = adapter_catalog
         application.state.local_session_token = app_settings.session_token_factory()
         application.state.engine_process_handles = {}
@@ -178,6 +197,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return catalog.list_manifests()
 
     application.include_router(profile_router)
+    application.include_router(workload_router)
 
     return application
 

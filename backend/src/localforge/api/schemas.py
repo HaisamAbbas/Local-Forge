@@ -7,13 +7,20 @@ from pydantic import Field, field_validator
 
 from localforge.adapters.contracts import ProbeResult
 from localforge.core.models import (
+    BenchmarkPlan,
     CapabilityValue,
+    Dataset,
     EngineIntegrationMode,
     EngineProfileStatus,
     HardwareSnapshot,
     JsonValue,
     MachineProfile,
+    PromptSizingMethod,
     SchemaModel,
+    TrafficMode,
+    WorkloadInputMode,
+    WorkloadKind,
+    WorkloadPreset,
 )
 from localforge.core.urls import parse_engine_endpoint
 
@@ -117,3 +124,90 @@ class RemoteEgressDisclosure(SchemaModel):
     host: str
     message: str
     request_will_be_sent: bool = False
+
+
+class WorkloadCreate(SchemaModel):
+    name: str = Field(min_length=1, max_length=160)
+    kind: WorkloadKind
+    input_mode: WorkloadInputMode = WorkloadInputMode.SYNTHETIC
+    dataset_id: UUID | None = None
+    preset: WorkloadPreset | None = None
+    request_count: int | None = Field(default=100, ge=1, le=1_000_000)
+    duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
+    concurrency: int = Field(default=1, ge=1, le=100_000)
+    concurrency_levels: list[int] = Field(default_factory=list, max_length=32)
+    traffic_mode: TrafficMode = TrafficMode.CLOSED_LOOP
+    arrival_rate_per_second: float | None = Field(default=None, gt=0, le=100_000)
+    warmup_count: int = Field(default=0, ge=0, le=100_000)
+    target_input_tokens: int | None = Field(default=None, ge=1, le=10_000_000)
+    target_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
+    max_output_tokens: int = Field(default=256, ge=1, le=1_000_000)
+    prompt_sizing_method: PromptSizingMethod = PromptSizingMethod.CHARACTERS
+    random_seed: int = Field(default=0, ge=0, le=2**63 - 1)
+    sampling_config: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class WorkloadPresetCreate(SchemaModel):
+    name: str = Field(min_length=1, max_length=160)
+    preset: WorkloadPreset
+    request_count: int | None = Field(default=100, ge=1, le=1_000_000)
+    duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
+    concurrency: int = Field(default=1, ge=1, le=100_000)
+    concurrency_levels: list[int] = Field(default_factory=list, max_length=32)
+    arrival_rate_per_second: float | None = Field(default=None, gt=0, le=100_000)
+    warmup_count: int = Field(default=0, ge=0, le=100_000)
+    max_output_tokens: int = Field(default=256, ge=1, le=1_000_000)
+    random_seed: int = Field(default=0, ge=0, le=2**63 - 1)
+    sampling_config: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DatasetPreview(SchemaModel):
+    row_number: int = Field(ge=1)
+    prompt_preview: str
+    prompt_size: int | None = Field(default=None, ge=0)
+    expected_answer_present: bool
+
+
+class DatasetImportResponse(SchemaModel):
+    dataset: Dataset
+    preview: list[DatasetPreview]
+    parsed_rows: int = Field(ge=0)
+    selected_rows: int = Field(ge=0)
+    duplicate_rows: int = Field(ge=0)
+    rows_excluded_by_limit: int = Field(ge=0)
+    count_method: str
+
+
+class BenchmarkPlanCreate(SchemaModel):
+    name: str = Field(min_length=1, max_length=160)
+    engine_profile_id: UUID
+    machine_profile_id: UUID | None = None
+    model_artifact_id: UUID | None = None
+    workload_id: UUID
+    retain_prompt_output: bool = False
+
+
+class PreflightIssue(SchemaModel):
+    code: str = Field(min_length=1, max_length=120)
+    message: str = Field(min_length=1, max_length=1000)
+
+
+class BenchmarkPreflight(SchemaModel):
+    valid: bool
+    target: dict[str, JsonValue]
+    workload: dict[str, JsonValue] | None = None
+    supported_options: list[str] = Field(default_factory=list)
+    unknown_options: list[str] = Field(default_factory=list)
+    unsupported_options: list[str] = Field(default_factory=list)
+    missing_prerequisites: list[str] = Field(default_factory=list)
+    estimated_duration_seconds: float | None = None
+    estimated_request_volume: int | None = None
+    resource_contention: list[str] = Field(default_factory=list)
+    remote_data_egress: RemoteEgressDisclosure | None = None
+    blockers: list[PreflightIssue] = Field(default_factory=list)
+    warnings: list[PreflightIssue] = Field(default_factory=list)
+
+
+class BenchmarkPlanResponse(SchemaModel):
+    plan: BenchmarkPlan
+    preflight: BenchmarkPreflight
