@@ -661,6 +661,33 @@ def _preflight(
                 "tokenizer_unknown",
                 "No tokenizer is installed for this workload; token counts are unknown.",
             )
+            if (
+                workload.target_input_tokens is not None
+                and workload.input_mode is WorkloadInputMode.SYNTHETIC
+            ):
+                _add_issue(
+                    blockers,
+                    "synthetic_tokenizer_size_unsupported",
+                    "Synthetic input cannot be sized to a tokenizer count until "
+                    "a tokenizer is installed.",
+                )
+        elif (
+            workload.target_input_tokens is not None
+            and workload.input_mode is WorkloadInputMode.SYNTHETIC
+        ):
+            _add_issue(
+                warnings,
+                "input_size_estimate_approximate",
+                "Synthetic input size uses a character or word approximation; "
+                "actual model tokenization varies.",
+            )
+        if workload.dataset_id is not None and workload.target_input_tokens is not None:
+            _add_issue(
+                blockers,
+                "dataset_input_size_override_unsupported",
+                "Imported prompt text is replayed as stored; clear the synthetic "
+                "input-size target to use this dataset.",
+            )
         if workload.warmup_count > 0:
             _add_issue(
                 warnings,

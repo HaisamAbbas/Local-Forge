@@ -628,3 +628,65 @@ def test_remote_preflight_discloses_prompt_egress_before_any_run_request(tmp_pat
         assert disclosure["code"] == "remote_data_egress"
         assert disclosure["request_will_be_sent"] is False
         assert "prompts" in disclosure["message"]
+
+
+def test_preflight_blocks_input_sizes_the_worker_cannot_honor(tmp_path) -> None:
+    client, _ = _client(tmp_path)
+    with client:
+        _authorize(client)
+        engine_id, model_id = _ready_engine(client)
+        tokenizer_workload = client.post(
+            "/api/v1/workloads",
+            json={
+                "name": "Unavailable tokenizer size",
+                "kind": "chat",
+                "input_mode": "synthetic",
+                "request_count": 1,
+                "target_input_tokens": 32,
+                "prompt_sizing_method": "tokenizer",
+            },
+        )
+        tokenizer_preflight = client.post(
+            "/api/v1/benchmark-plans/preflight",
+            json={
+                "name": "Tokenizer size plan",
+                "engine_profile_id": engine_id,
+                "model_artifact_id": model_id,
+                "workload_id": tokenizer_workload.json()["id"],
+            },
+        )
+        assert tokenizer_preflight.status_code == 200, tokenizer_preflight.text
+        assert tokenizer_preflight.json()["valid"] is False
+        assert "synthetic_tokenizer_size_unsupported" in {
+            item["code"] for item in tokenizer_preflight.json()["blockers"]
+        }
+
+        imported = _upload(client, '{"prompt":"preserved dataset prompt"}\n', retain_content="true")
+        dataset_workload = client.post(
+            "/api/v1/workloads",
+            json={
+                "name": "Dataset size override",
+                "kind": "chat",
+                "input_mode": "dataset",
+                "dataset_id": imported.json()["dataset"]["id"],
+                "request_count": 1,
+                "target_input_tokens": 32,
+            },
+        )
+        dataset_preflight = client.post(
+            "/api/v1/benchmark-plans/preflight",
+            json={
+                "name": "Dataset size plan",
+                "engine_profile_id": engine_id,
+                "model_artifact_id": model_id,
+                "workload_id": dataset_workload.json()["id"],
+            },
+        )
+        assert dataset_preflight.status_code == 200, dataset_preflight.text
+        assert dataset_preflight.json()["valid"] is False
+        assert "dataset_input_size_override_unsupported" in {
+            item["code"] for item in dataset_preflight.json()["blockers"]
+        }
+        assert "input_size_estimate_approximate" not in {
+            item["code"] for item in dataset_preflight.json()["warnings"]
+        }
