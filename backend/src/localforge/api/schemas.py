@@ -1,6 +1,7 @@
 """Request and response schemas for local machine and engine profile routes."""
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import Field, field_validator
@@ -23,6 +24,8 @@ from localforge.core.models import (
     WorkloadPreset,
 )
 from localforge.core.urls import parse_engine_endpoint
+
+ConcurrencyLevel = Annotated[int, Field(ge=1, le=100_000)]
 
 
 class LocalSessionResponse(SchemaModel):
@@ -135,7 +138,7 @@ class WorkloadCreate(SchemaModel):
     request_count: int | None = Field(default=100, ge=1, le=1_000_000)
     duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
     concurrency: int = Field(default=1, ge=1, le=100_000)
-    concurrency_levels: list[int] = Field(default_factory=list, max_length=32)
+    concurrency_levels: list[ConcurrencyLevel] = Field(default_factory=list, max_length=32)
     traffic_mode: TrafficMode = TrafficMode.CLOSED_LOOP
     arrival_rate_per_second: float | None = Field(default=None, gt=0, le=100_000)
     warmup_count: int = Field(default=0, ge=0, le=100_000)
@@ -153,7 +156,7 @@ class WorkloadPresetCreate(SchemaModel):
     request_count: int | None = Field(default=100, ge=1, le=1_000_000)
     duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
     concurrency: int = Field(default=1, ge=1, le=100_000)
-    concurrency_levels: list[int] = Field(default_factory=list, max_length=32)
+    concurrency_levels: list[ConcurrencyLevel] = Field(default_factory=list, max_length=32)
     arrival_rate_per_second: float | None = Field(default=None, gt=0, le=100_000)
     warmup_count: int = Field(default=0, ge=0, le=100_000)
     max_output_tokens: int = Field(default=256, ge=1, le=1_000_000)

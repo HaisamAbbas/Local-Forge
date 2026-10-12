@@ -366,7 +366,7 @@ class Workload(DomainModel):
     preset: WorkloadPreset | None = None
     request_count: int | None = Field(default=100, ge=1, le=1_000_000)
     duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
-    concurrency: int = Field(default=1, ge=1)
+    concurrency: int = Field(default=1, ge=1, le=100_000)
     concurrency_levels: list[int] = Field(default_factory=list, max_length=32)
     traffic_mode: TrafficMode = TrafficMode.CLOSED_LOOP
     arrival_rate_per_second: float | None = Field(default=None, gt=0, le=100_000)
@@ -416,10 +416,12 @@ class Workload(DomainModel):
             and self.traffic_mode is not TrafficMode.OPEN_LOOP
         ):
             raise ValueError("target request-rate workloads require open-loop traffic")
-        if any(level < 1 for level in self.concurrency_levels) or self.concurrency_levels != sorted(
-            set(self.concurrency_levels)
+        if any(level < 1 or level > 100_000 for level in self.concurrency_levels) or (
+            self.concurrency_levels != sorted(set(self.concurrency_levels))
         ):
-            raise ValueError("concurrency_levels must be unique, positive, and ascending")
+            raise ValueError(
+                "concurrency_levels must be unique, positive, ascending, and at most 100000"
+            )
         return self
 
     @field_validator("sampling_config")
@@ -427,6 +429,7 @@ class Workload(DomainModel):
     def sampling_configuration_is_safe(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
         secret_names = {
             "access_token",
+            "access_key",
             "api_key",
             "api_token",
             "auth_token",
@@ -435,6 +438,7 @@ class Workload(DomainModel):
             "credential",
             "credentials",
             "password",
+            "private_key",
             "secret",
             "token",
         }
@@ -443,8 +447,32 @@ class Workload(DomainModel):
         def contains_secret_name(item: JsonValue) -> bool:
             if isinstance(item, dict):
                 for key, nested in item.items():
+                    snake_case_key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+                    key_parts = set(re.findall(r"[a-z0-9]+", snake_case_key.casefold()))
                     normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
-                    if normalized_key in normalized_secrets or contains_secret_name(nested):
+                    sensitive_parts = key_parts.intersection(
+                        {
+                            "authorization",
+                            "password",
+                            "secret",
+                            "token",
+                            "credential",
+                            "credentials",
+                        }
+                    )
+                    api_key_parts = {"api", "key"}.issubset(key_parts)
+                    auth_key_parts = {"auth", "key"}.issubset(key_parts)
+                    private_key_parts = {"private", "key"}.issubset(key_parts)
+                    access_key_parts = {"access", "key"}.issubset(key_parts)
+                    if (
+                        normalized_key in normalized_secrets
+                        or sensitive_parts
+                        or api_key_parts
+                        or auth_key_parts
+                        or private_key_parts
+                        or access_key_parts
+                        or contains_secret_name(nested)
+                    ):
                         return True
             if isinstance(item, list):
                 return any(contains_secret_name(nested) for nested in item)
