@@ -1,0 +1,315 @@
+# LOCALFORGE Inference Lab implementation plan
+
+**Status:** Prompts 0–3 complete and verified; Prompt 4 backend work is in progress.  
+**Reviewed:** 12 October 2026  
+**Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
+**Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
+
+## Repository reconnaissance
+
+At the start of Prompt 0, the workspace contained only `ImplementationPlan/` with the two source Markdown documents and eleven conceptual PNGs listed below. The current application foundation was added in Prompt 1. This workspace still has no Git metadata: `git status --short --branch` returned “fatal: not a git repository”; there is no current branch or tracked/untracked status to report. No pre-existing files were overwritten or discarded.
+
+No `AGENTS.md` was found at `D:\AGENTS.md`, `D:\Local-Forge\AGENTS.md`, or `D:\Local-Forge\ImplementationPlan\AGENTS.md`.
+
+### Exact project files inspected
+
+- `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`
+- `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
+- `ImplementationPlan/Conceptual-Images/Completed run metrics dashboard.png`
+- `ImplementationPlan/Conceptual-Images/KV Cache Learning Lab.png`
+- `ImplementationPlan/Conceptual-Images/Local model inventory workspace.png`
+- `ImplementationPlan/Conceptual-Images/LocalForge Add Engine Wizard.png`
+- `ImplementationPlan/Conceptual-Images/Localforge benchmark workload setup screen.png`
+- `ImplementationPlan/Conceptual-Images/LocalForge Compare experiments dashboard.png`
+- `ImplementationPlan/Conceptual-Images/LOCALFORGE Engines Dashboard.png`
+- `ImplementationPlan/Conceptual-Images/LocalForge inference benchmark in progress.png`
+- `ImplementationPlan/Conceptual-Images/LocalForge Inference Lab Overview.png`
+- `ImplementationPlan/Conceptual-Images/LocalForge Machine Profile Dashboard.png`
+- `ImplementationPlan/Conceptual-Images/Privacy controls in Localforge Settings.png`
+
+The conceptual images use sample values and multiple navigation variants. Treat them as visual references; the product specification governs behavior, terminology, and the requirement to label illustrative data.
+
+### Environment and available commands
+
+The current developer shell is Windows PowerShell 5.1. Available tools and observed versions:
+
+| Tool | Observed version / status |
+|---|---|
+| Python | 3.12.10 |
+| Node.js | 25.2.1 |
+| npm | 11.6.2 |
+| uv | 0.12.17 |
+| Ruff | 0.16.6 |
+| pytest | 9.1.1 |
+| Docker | 29.7.2 |
+| Git | Installed, but this workspace is not a Git repository |
+| pnpm | Not installed |
+
+Prompt 1 established the first validation commands and CI configuration below. Commands have been run on this workspace; Prompt 1 results are recorded at the end of this document.
+
+## Architecture and mapping to the product specification
+
+No application architecture existed at initial reconnaissance. Prompt 1 now implements the starter architecture described here: a local-first React/TypeScript frontend, Python FastAPI/Pydantic control plane, isolated benchmark worker, and SQLite persistence. Keep implementation small and typed; add engine-specific behavior behind adapters rather than separate UI screens.
+
+| Area | Specification direction | Initial implementation mapping |
+|---|---|---|
+| Web UI | React and TypeScript, desktop-first, accessible charts/tables | `frontend/` with React, TypeScript, Vite, component tests, and Playwright E2E |
+| Local control plane | FastAPI, Pydantic, versioned `/api/v1` | `backend/src/localforge/api/`; bind to `127.0.0.1` by default |
+| Shared contracts | Typed, versioned API and adapter schemas | Pydantic models in `backend/src/localforge/core/models.py` are the backend source of truth; API request/response schemas will come directly from them, with frontend types generated or contract-checked from OpenAPI when domain routes are added |
+| Adapter boundary | Capability-aware adapters for attached, managed, library, and composed targets | `backend/src/localforge/adapters/`; begin with a deterministic fake adapter and shared contract tests |
+| Long-running work | Isolated worker process; run lifecycle, events, cancellation, and resource locks | `backend/src/localforge/worker/` invoked independently of an HTTP request; coordinator persists state and events |
+| Persistence | SQLite WAL for metadata; raw samples retained before aggregation | `backend/src/localforge/storage/`, versioned forward-only migrations, temporary DB support; JSONL for high-volume raw samples initially |
+| Privacy | Local by default; explicit remote egress; secrets and content redacted by default | Loopback API, secret references rather than plaintext config, remote-target disclosure before sending requests, opt-in content retention |
+| Documentation | Accurate setup, support status, methods, and limitations | `README.md`, `docs/`, and a connector support matrix added as implementation work begins |
+
+Target layout, with Prompt 1 foundations implemented and domain/adapter modules reserved for later phases:
+
+```text
+backend/
+  .python-version
+  pyproject.toml
+  src/localforge/
+    api/          # FastAPI routes and application startup
+    core/         # typed domain models, settings, errors
+    adapters/     # adapter manifest, capability model, fake adapter
+    storage/      # SQLite connection, migrations, repositories
+    worker/       # independent benchmark worker entry point
+  tests/
+frontend/
+  package.json
+  src/            # React app, API client, screens, components
+  e2e/            # deterministic browser workflows
+docs/
+```
+
+Use SQLite from the standard library or a thin async-compatible wrapper unless a concrete requirement justifies a heavier ORM. Keep request samples and event payloads free of prompt/output bodies by default. Do not add charting, telemetry, model-download, or cloud dependencies before a feature needs them.
+
+## Ordered implementation phases
+
+Follow the prompt pack in one conversation and the same workspace. Prompt 0 is complete. Do not skip prerequisite phases.
+
+| Prompt | Phase | Outcome |
+|---|---|---|
+| 1 | Project foundation and runnable shell | React shell, FastAPI health endpoint, SQLite migration startup, worker entry point, local setup, initial CI checks |
+| 2 | Domain contracts, persistence, and migrations | Versioned schemas and repositories for machines, engines, models, workloads, plans, runs, samples, experiments, and reports |
+| 3 | Adapter contract and deterministic fake engine | Capability states, adapter manifest, fake streaming/error/cancellation behaviors, reusable contract tests |
+| 4 | Machine inspection and engine registry | Provenance-aware system profile; profile CRUD, safe probes, local security and credential handling |
+| 5 | Workloads, dataset import, and preflight | Deterministic presets/import, validation, snapshots/hashes, warnings and blockers |
+| 6 | Run coordinator, worker lifecycle, locks, and events | Separate worker execution, persisted state/events, reconnect/replay, cancellation and lock recovery |
+| 7 | Metrics and measurement integrity | Raw request samples, formulas, source labels, native metrics, aggregation and uncertainty warnings |
+| 8 | Overview, machines, and engines UI | Real API-backed machine and engine flows with accessible unknown/error states |
+| 9 | Workload builder and plan review UI | Create, validate, review, save, and replay workload plans from the UI |
+| 10 | Live runs, history, and run detail | Follow fake-engine runs, inspect persisted metrics/events, cancel safely, recover after reconnect |
+| 11 | Generic OpenAI-compatible endpoint | Version-verified attached endpoint adapter with local mock fixtures and remote-egress disclosure |
+| 12 | llama.cpp / llama-server adapter | Attach first; managed launch only where safely version-tested and process-owned |
+| 13 | Ollama adapter | Attach, model inventory and streaming; never pull/delete models implicitly |
+| 14 | Comparisons, experiments, and exports | Comparability grades, controlled variants, reproducible JSON/CSV/Markdown reports |
+| 15A | vLLM and SGLang | Attach adapters first, optional version-tested managed Linux/CUDA profiles |
+| 15B | Additional serving and wrapper connectors | TensorRT-LLM, Triton, LMDeploy, LightLLM, TGI, LocalAI, and KoboldCpp with truthful status |
+| 15C | Platform, library, and distributed connectors | MLX-LM, MLC, OpenVINO GenAI, ONNX Runtime GenAI, Mistral.rs, ExLlamaV3, and Dynamo |
+| 16 | Ecosystem catalog and adapter contribution workflow | Full catalog/support matrix and fixture-backed adapter author guidance |
+| 17 | Security, privacy, recovery, and edge-case hardening | Code-driven hardening of the requirements in spec sections 12–14 and 17 |
+| 18 | Full E2E, release gate, and handoff | Deterministic ten-step browser workflow, complete local release gate, and evidence-based handoff |
+
+Prompts 15A–15C expand the ecosystem after the MVP adapters and are performed in that order. Before each real connector, check its current official documentation and record the tested version. A catalog entry alone is not a claim of working support.
+
+## First usable vertical slice
+
+Build and verify a deterministic fake-engine workflow before requiring any real inference engine:
+
+1. Start the UI, local API, and independent worker using documented commands.
+2. Inspect a machine profile and register/probe the fake engine.
+3. Create a deterministic preset workload, review preflight, and save a plan.
+4. Run it through the worker; persist run state, events, request outcomes, raw timings, and normalized metrics.
+5. Follow progress in the UI, cancel a second run, reconnect, and inspect both terminal records without fabricated measurements.
+
+Prompts 1–10 deliver this vertical slice. It proves the application path and CI behavior without model downloads, GPUs, or public endpoints. The first useful real-engine MVP then adds the generic OpenAI-compatible, llama.cpp, and Ollama paths in Prompts 11–13, followed by comparison and reproducible export in Prompt 14.
+
+Keep the following out of the first vertical slice: production-serving breadth (15A–15C), distributed topology, library pipelines, low-level KV-cache/kernel learning labs, broad model discovery/download, quality evaluation, cloud hosting, and public leaderboards. Implement baseline privacy, loopback binding, secret redaction, and process ownership as their foundational phases require; Prompt 17 is a further hardening pass, not a reason to defer those basics.
+
+## Validation commands and CI gates
+
+Prompt 1 established the following commands and CI gates. They assume `backend/pyproject.toml` and `frontend/package.json` from the initial layout.
+
+Backend, from `backend/`:
+
+```powershell
+uv sync --locked
+uv run ruff format --check src tests
+uv run ruff check src tests
+uv run mypy src
+uv run pytest
+```
+
+Frontend, from `frontend/`:
+
+```powershell
+npm ci
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+npm run e2e
+```
+
+The E2E setup must use the deterministic fake adapter and a preinstalled Playwright browser in CI. Live-engine checks are opt-in; default checks must not download weights, require accelerators, call public endpoints, or depend on a real engine. CI should run backend formatting/lint/type/unit/integration/adapter checks, frontend formatting/lint/type/unit/build checks, and browser E2E from a clean checkout. Add security-relevant negative tests with the behavior they protect. There is no existing security tool to preserve or report.
+
+Prompt 0 itself did not run project checks because no project code existed then. Prompt 1 ran these checks; see the completion record below.
+
+## Constraints, assumptions, and risks
+
+- **Execution model:** the evaluator installs and runs LOCALFORGE on their own machine. The dashboard and control plane stay local by default; the selected inference engine normally runs on that machine. A remote engine is an explicit user-configured target, with a prompt/data egress notice before requests are sent. The developer's machine is not a shared model host.
+- **Developer environment:** implementation runs on Windows PowerShell with Python 3.12 and Node/npm. `backend/.python-version` selects Python 3.12 for repeatability. The product spec calls for Windows, Linux, and macOS support; adapter support remains platform-specific and must be labeled honestly.
+- **Initial Git baseline:** this workspace began without Git metadata. A repository is being initialized on `main` for publication; the GitHub remote was empty at first inspection.
+- **Source path in prompt pack:** the pack refers to `/workspace/scratch/...` for the specification. That path is absent here; the local source is under `ImplementationPlan/` and should be used as the authority.
+- **Engine variability:** API behavior, metric definitions, launch flags, and supported versions change. Verify official docs and fixtures at each adapter phase; keep unknown capabilities unknown.
+- **Measurement integrity:** ensure client and engine metrics remain distinct, use monotonic durations, preserve samples before aggregation, and do not imply causality from uncontrolled comparisons.
+- **Security and privacy:** local-first defaults still require origin protection, credential handling, subprocess ownership, path validation, and deliberate remote egress. Build these into their owning phases.
+- **Mockup consistency:** navigation labels differ among references. Use the spec's information architecture and prioritize accessible, working flows over exact pixel imitation.
+- **Dependency and browser setup:** package manifests and lockfiles were introduced in Prompt 1. Keep dependencies modest and use npm; pnpm was unavailable during reconnaissance.
+
+## Prompt 0 completion record
+
+- Read both source documents and reviewed all eleven conceptual images.
+- Inspected the workspace root, searched for project files, checked Git status, checked applicable `AGENTS.md` paths, and enumerated available development tools.
+- Created the initial reconnaissance plan only; Prompt 1 implementation is recorded separately below. No existing user work was discarded.
+- Unresolved constraint: the workspace has no Git repository, so branch and working-tree status cannot be established.
+
+## Prompt 1 completion record
+
+### Delivered
+
+- Added the React/TypeScript/Vite dark workspace shell with working hash navigation for Overview, Engines, Workloads, Runs, Experiments, and Learning.
+- Added the FastAPI app with `/health` and `/api/v1/health`, loopback development defaults, and a Vite same-origin proxy.
+- Added SQLite WAL startup, bounded busy waits, `PRAGMA user_version` migration infrastructure, schema version 1, and a safe refusal to open a newer schema.
+- Added an independently invokable `localforge-worker --check` process entry point and deterministic fake-engine test fixture.
+- Added frontend API unavailable/recovery handling, accessible status updates, unit tests, Playwright smoke coverage, GitHub Actions CI, `.gitignore`, and local setup instructions.
+- Kept the UI free of sample metrics and third-party network-loaded assets. Engine registration and benchmark execution remain for later phases.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv sync --locked` — passed.
+- `uv run --locked ruff format --check src tests` — passed.
+- `uv run --locked ruff check src tests` — passed.
+- `uv run --locked mypy src` — passed (8 source files).
+- `uv run --locked pytest` — passed (6 tests).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` — passed.
+- `npm ci` — passed from the committed frontend lockfile.
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm run test` — passed (2 tests).
+- `npm run build` — passed.
+- `npm run e2e` — passed (1 Chromium smoke test covering startup, navigation, reload, and API status).
+
+### Limitations and next phase
+
+- The worker is a tested process boundary only; job scheduling and benchmark execution arrive in Prompt 6.
+- Engine and workload screens are honest empty states until their API-backed phases; no real engine is connected yet.
+- The app was validated locally on Windows. GitHub Actions is configured on Ubuntu; broader OS and connector-specific coverage remains future work.
+- The workspace still lacks Git metadata, so changes cannot be summarized as a branch diff.
+- Prompt 2 now provides domain contracts, persistence repositories, and migrations; see the completion record below.
+
+## Prompt 2 completion record
+
+### Delivered
+
+- Added versioned Pydantic contracts for machine and engine profiles, capability snapshots, model artifacts, datasets, workloads, benchmark plans and runs, request and metric samples, experiment groups, and report metadata.
+- Added explicit lifecycle and capability enums, stable UUIDs, UTC timestamps, nullable unknown hardware/engine values, metric units and source labels, and a separate lowercase namespace for engine-owned extension data.
+- Kept credentials in secret references instead of engine config; request/output bodies require both a retention marker and an explicit repository opt-in. Reference-only and redacted-summary samples remain supported.
+- Added schema migration 2 with typed domain-record storage and dedicated raw request/metric sample tables. Sample writes require a persisted benchmark run; raw request samples are stored before any aggregate layer exists.
+- Added typed SQLite CRUD repositories, caller-owned connections, bounded list sizes, parameterized SQL, atomic transactions, clear duplicate/not-found errors, explicit retained-content clearing, and a run deletion path that removes samples atomically. Generic run deletion is rejected to prevent orphaned samples.
+- Documented Pydantic as the future API/OpenAPI contract source. Frontend domain types are not duplicated while domain routes do not yet exist.
+- Added validation, CRUD, rollback, migration-upgrade/retry, raw metric preservation, retention, and run/content deletion tests.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` — passed.
+- `uv run --locked ruff check src tests` — passed.
+- `uv run --locked mypy src` — passed (11 source files).
+- `uv run --locked pytest` — passed (21 tests).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` — passed.
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm run test` — passed (2 tests).
+- `npm run build` — passed.
+- `npm run e2e` — passed (1 Chromium smoke test).
+
+### Limitations and next phase
+
+- These records are persistence contracts; user-facing CRUD APIs and dashboard workflows arrive in later prompts.
+- Raw samples are kept in SQLite for the first workflow; high-volume JSONL/Parquet export and aggregate computation remain future work.
+- Prompt 3 is now complete; see its completion record below.
+
+## Prompt 3 completion record
+
+### Delivered
+
+- Added a versioned adapter manifest and async protocol covering configuration validation, probe, start/stop, model inventory, request preparation and streaming, abort, native metrics, runtime fingerprint, and close.
+- The shared catalog registers adapters by stable ID, lists manifests for the API, rejects incompatible protocol versions, checks capability and metric claims, and reports missing adapters with readable diagnostics.
+- Kept attached endpoint, managed process, library pipeline, and composed serving-stack modes distinct in the shared contracts. Capability values retain supported, unsupported, unknown, and user-supplied states; the fake manifest declares its capability vocabulary.
+- Added the deterministic fake adapter with gated first output and chunk delivery, multi-chunk streams, error/disconnect/timeout outcomes, cancellation, optional usage/native metrics, probe failures, and process ownership checks. It does not launch an operating-system process or load a model.
+- Added an adapter call runner that schedules async probes and streams in tracked tasks, cleans up on early stream close, and cancels outstanding calls on shutdown.
+- Exposed the registered manifests at `/api/v1/engines/catalog` and added a reusable adapter contract helper for future connector tests.
+- Added tests for manifest validation, config diagnostics, capability claim rejection, missing/old adapters, stream outcomes, cancellation, early close, optional metrics, event-loop responsiveness, process ownership, and the API catalog.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` — passed.
+- `uv run --locked ruff check src tests` — passed.
+- `uv run --locked mypy src` — passed (17 source files).
+- `uv run --locked pytest` — passed (41 tests).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` — passed.
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm run test` — passed (2 tests).
+- `npm run build` — passed.
+- `npm run e2e` — passed (1 Chromium smoke test).
+
+### Limitations and next phase
+
+- The fake adapter exercises LOCALFORGE's connector boundary; it produces no real inference measurements. The dashboard remains an empty workspace until the API-backed UI phases.
+- Adapters that perform blocking library inference must run in an isolated worker process when that execution phase is implemented; the current runner isolates async adapter calls from other API work.
+- Prompt 4 machine inspection, profile API, and local security work is underway; see the current progress and limitations below.
+
+## Prompt 4 progress record
+
+### Delivered so far
+
+- Added best-effort OS, CPU, memory, and NVIDIA metadata inspection with field provenance and explicit unknown values; added manual unverified machine profile CRUD.
+- Added an idempotent endpoint to save the detected local-machine profile, so engine profiles can reference its stable ID.
+- Added engine profile CRUD, model inventory persistence, capability snapshots, enable/disable, fake managed start/stop, and independent probe checks; configured health/model routes are passed to adapters.
+- Added URL validation, remote-target confirmation before probing, loopback mutation checks, per-process session tokens, and response masking for credential references.
+- Serialized same-profile mutation/probe/lifecycle operations, tightened secret-key validation to reject common token fields in profile config, kept model identity separate from the engine profile label, and allow a successful probe to recover a profile from `needs_attention`.
+- Added API and domain tests for profile behavior, partial probes, remote disclosure, credential masking, and local-origin protection.
+
+### Checks run after the latest changes
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` — passed.
+- `uv run --locked ruff check src tests` — passed.
+- `uv run --locked mypy src` — passed (25 source files).
+- `uv run --locked pytest -q` — passed (58 tests).
+
+### Remaining work before Prompt 4 is complete
+
+- Profile and machine screens are still empty states; the user-facing flows are scheduled in Prompt 8.
+- Credential references are validated and masked, but OS credential-store read/write integration is not implemented.
+- Managed lifecycle currently exercises only the fake adapter and does not launch an operating-system process.
+- No real inference endpoint adapter or benchmark execution path is available yet.
