@@ -137,6 +137,7 @@ class FakeEngineAdapter:
         self._extra_capability_claims = extra_capability_claims or {}
         self._active_requests: dict[UUID, asyncio.Event] = {}
         self._owned_processes: dict[UUID, AdapterProcessHandle] = {}
+        self._requests_total = 0
         self._closed = False
 
     @property
@@ -420,6 +421,7 @@ class FakeEngineAdapter:
         async def events() -> AsyncIterator[AdapterStreamEvent]:
             cancelled = asyncio.Event()
             self._active_requests[request.request_id] = cancelled
+            self._requests_total += 1
             self.scenario.stream_started.set()
             sequence = 0
 
@@ -537,9 +539,10 @@ class FakeEngineAdapter:
             metrics=[
                 AdapterMetric(
                     metric_name="fake.requests_total",
-                    value=1,
+                    value=self._requests_total,
                     unit="requests",
                     source=MetricSource.ENGINE_NATIVE,
+                    kind="counter",
                     labels={"adapter": FAKE_ADAPTER_ID},
                 )
             ],

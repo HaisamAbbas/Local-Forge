@@ -17,6 +17,7 @@ from localforge.core.models import (
     HardwareSnapshot,
     JsonValue,
     MachineProfile,
+    MetricSample,
     PromptSizingMethod,
     RequestSample,
     RunEventRecord,
@@ -238,3 +239,7 @@ class RunEventPage(SchemaModel):
 class RunSamplesResponse(SchemaModel):
     samples: list[RequestSample] = Field(default_factory=list)
     next_sequence_number: int | None = None
+
+
+class RunMetricsResponse(SchemaModel):
+    metrics: list[MetricSample] = Field(default_factory=list)

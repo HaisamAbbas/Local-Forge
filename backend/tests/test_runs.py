@@ -27,25 +27,33 @@ from localforge.core.models import (
     HardwareSnapshot,
     MachineProfile,
     RequestOutcome,
+    RequestSample,
+    TrafficMode,
     Workload,
     WorkloadInputMode,
     WorkloadKind,
     WorkloadPreset,
     WorkloadStatus,
 )
+from localforge.metrics import persist_derived_run_metrics
 from localforge.runs import (
     InvalidRunTransition,
     ResourceLockConflict,
     UnsafeRunEvent,
     append_run_event,
     create_queued_run,
+    finalize_request_metrics,
     list_run_events,
     reconcile_stale_workers,
     recover_runs_on_startup,
     transition_run,
 )
 from localforge.storage.database import initialize_database, open_database
-from localforge.storage.repositories import RecordRepository, RequestSampleRepository
+from localforge.storage.repositories import (
+    MetricSampleRepository,
+    RecordRepository,
+    RequestSampleRepository,
+)
 from localforge.worker.execution import execute_run
 
 
@@ -126,6 +134,52 @@ def test_run_events_replay_in_order_and_reject_bodies(connection) -> None:
         append_run_event(connection, run.id, "output_chunk", {"text": "private"})
 
 
+def test_worker_interruption_recovers_partial_output_without_inventing_duration(connection) -> None:
+    run = _new_queued_run(connection)
+    request_id = uuid4()
+    samples = RequestSampleRepository(connection)
+    samples.create(
+        RequestSample(
+            run_id=run.id,
+            request_id=request_id,
+            sequence_number=0,
+            outcome=RequestOutcome.IN_PROGRESS,
+            started_at=datetime.now(UTC),
+            dispatch_offset_ms=0,
+        )
+    )
+    append_run_event(connection, run.id, "first_output", {"observed": True}, request_id=request_id)
+    append_run_event(
+        connection,
+        run.id,
+        "output_chunk",
+        {"chunk_index": 0, "characters": 4},
+        request_id=request_id,
+    )
+    append_run_event(
+        connection,
+        run.id,
+        "output_chunk",
+        {"chunk_index": 1, "characters": 6},
+        request_id=request_id,
+    )
+
+    assert samples.interrupt_incomplete_for_run(run.id) == 1
+    recovered = samples.list_for_run(run.id)[0]
+
+    assert recovered.outcome is RequestOutcome.INTERRUPTED
+    assert recovered.error_class == "worker_interrupted"
+    assert recovered.first_output_offset_ms is not None
+    assert recovered.ttft_ms == pytest.approx(recovered.first_output_offset_ms)
+    assert recovered.completed_at is None
+    assert recovered.completed_offset_ms is None
+    assert recovered.latency_ms is None
+    assert recovered.output_event_count == 2
+    assert recovered.output_characters == 10
+    assert recovered.partial_output_observed is True
+    assert len(recovered.inter_event_latency_ms) == 1
+
+
 def test_stale_worker_lease_releases_resource_lock(connection) -> None:
     run = _new_queued_run(connection, locks=[("cpu_group", "machine-1")])
     stale = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
@@ -136,6 +190,15 @@ def test_stale_worker_lease_releases_resource_lock(connection) -> None:
     assert reconcile_stale_workers(connection, stale_after_seconds=15) == 1
     recovered = RecordRepository(connection, BenchmarkRun).get(run.id)
     assert recovered is not None and recovered.status is BenchmarkRunStatus.INTERRUPTED
+    events = list_run_events(connection, run.id)
+    metric_events = [event for event in events if event.event_type == "run_metric"]
+    terminal_event = next(
+        event
+        for event in events
+        if event.event_type == "run_status" and event.payload.get("to") == "interrupted"
+    )
+    assert metric_events
+    assert max(event.sequence_number for event in metric_events) < terminal_event.sequence_number
     assert (
         connection.execute(
             "SELECT COUNT(*) FROM resource_locks WHERE run_id = ?", (str(run.id),)
@@ -256,7 +319,45 @@ def test_startup_marks_nonterminal_runs_interrupted(connection) -> None:
     recovered = RecordRepository(connection, BenchmarkRun).get(run.id)
     assert recovered is not None and recovered.status is BenchmarkRunStatus.INTERRUPTED
     assert recovered.error_code == "app_restarted"
-    assert list_run_events(connection, run.id)[-1].payload["to"] == "interrupted"
+    events = list_run_events(connection, run.id)
+    metric_events = [event for event in events if event.event_type == "run_metric"]
+    assert metric_events
+    assert events[-1].event_type == "run_status"
+    assert events[-1].payload["to"] == "interrupted"
+    assert max(event.sequence_number for event in metric_events) < events[-1].sequence_number
+
+
+def test_finalization_replays_persisted_metric_events_without_duplicates(connection) -> None:
+    run = _new_queued_run(connection)
+    RequestSampleRepository(connection).create(
+        RequestSample(
+            run_id=run.id,
+            sequence_number=0,
+            outcome=RequestOutcome.SUCCEEDED,
+            started_at=datetime.now(UTC),
+            dispatch_offset_ms=0,
+            completed_offset_ms=100,
+            latency_ms=100,
+        )
+    )
+
+    persisted = persist_derived_run_metrics(connection, run.id)
+    assert persisted
+    assert not [
+        event for event in list_run_events(connection, run.id) if event.event_type == "run_metric"
+    ]
+
+    finalize_request_metrics(connection, run.id)
+    first_events = [
+        event for event in list_run_events(connection, run.id) if event.event_type == "run_metric"
+    ]
+    finalize_request_metrics(connection, run.id)
+    second_events = [
+        event for event in list_run_events(connection, run.id) if event.event_type == "run_metric"
+    ]
+
+    assert len(first_events) == len(persisted)
+    assert len(second_events) == len(first_events)
 
 
 def test_new_app_instance_recovers_persisted_active_run(tmp_path) -> None:
@@ -368,6 +469,7 @@ def test_worker_executes_each_concurrency_sweep_level(tmp_path) -> None:
     connection = open_database(database_path)
     try:
         samples = RequestSampleRepository(connection).list_for_run(run.id)
+        metrics = MetricSampleRepository(connection).list_for_run(run.id)
         events = list_run_events(connection, run.id)
         measurement_starts = [
             event
@@ -379,10 +481,191 @@ def test_worker_executes_each_concurrency_sweep_level(tmp_path) -> None:
             for event in events
             if event.event_type == "request_started" and event.payload.get("phase") == "warmup"
         ]
-        assert len(samples) == 4
-        assert [sample.sequence_number for sample in samples] == [0, 1, 2, 3]
+        measurement_samples = [sample for sample in samples if sample.phase == "measurement"]
+        assert len(samples) == 6
+        assert len(measurement_samples) == 4
+        assert [sample.sequence_number for sample in measurement_samples] == [2, 3, 4, 5]
+        assert {sample.concurrency_level for sample in measurement_samples} == {1, 2}
+        assert {sample.effective_concurrency for sample in measurement_samples} == {1, 2}
         assert {event.payload["concurrency_level"] for event in measurement_starts} == {1, 2}
         assert {event.payload["concurrency_level"] for event in warmup_starts} == {1, 2}
+        attempted_by_level = [
+            metric
+            for metric in metrics
+            if metric.metric_name == "requests_attempted" and metric.aggregation == "run_total"
+        ]
+        assert {metric.labels["concurrency_level"] for metric in attempted_by_level} == {
+            "1",
+            "2",
+        }
+        assert all(metric.value == 2 for metric in attempted_by_level)
+    finally:
+        connection.close()
+
+
+def test_worker_retains_request_bodies_at_terminal_sample_when_enabled(tmp_path) -> None:
+    database_path = tmp_path / "retained-request.sqlite3"
+    initialize_database(database_path)
+    connection = open_database(database_path)
+    try:
+        run, plan, _, workload = _worker_fixture(connection)
+        RecordRepository(connection, BenchmarkPlan).update(
+            BenchmarkPlan.model_validate(
+                plan.model_dump(mode="python")
+                | {"measured_requests": 1, "retain_prompt_output": True}
+            )
+        )
+        RecordRepository(connection, Workload).update(
+            Workload.model_validate(workload.model_dump(mode="python") | {"request_count": 1})
+        )
+    finally:
+        connection.close()
+
+    catalog = AdapterCatalog()
+    catalog.register(FakeEngineAdapter())
+    assert (
+        asyncio.run(
+            execute_run(
+                run_id=run.id,
+                database_path=database_path,
+                data_directory=tmp_path,
+                app_instance_id="test-app",
+                worker_id=run.worker_id or "",
+                catalog_factory=lambda: catalog,
+            )
+        )
+        == 0
+    )
+
+    connection = open_database(database_path)
+    try:
+        sample = RequestSampleRepository(connection).list_for_run(run.id)[0]
+        assert sample.outcome is RequestOutcome.SUCCEEDED
+        assert sample.content_retained is True
+        assert sample.prompt_text is not None
+        assert sample.output_text == "deterministic fake response"
+    finally:
+        connection.close()
+
+
+def test_worker_persists_native_metric_snapshots_and_counter_delta(tmp_path) -> None:
+    database_path = tmp_path / "native-metrics.sqlite3"
+    initialize_database(database_path)
+    connection = open_database(database_path)
+    try:
+        run, plan, engine, workload = _worker_fixture(connection)
+        RecordRepository(connection, EngineProfile).update(
+            EngineProfile.model_validate(
+                engine.model_dump(mode="python")
+                | {"adapter_version": "1.0.0", "engine_version": "fake-1"}
+            )
+        )
+        RecordRepository(connection, BenchmarkPlan).update(
+            BenchmarkPlan.model_validate(plan.model_dump(mode="python") | {"measured_requests": 2})
+        )
+        RecordRepository(connection, Workload).update(
+            Workload.model_validate(workload.model_dump(mode="python") | {"request_count": 2})
+        )
+    finally:
+        connection.close()
+
+    adapter = FakeEngineAdapter(FakeEngineScenario(native_metrics=True))
+    catalog = AdapterCatalog()
+    catalog.register(adapter)
+    result = asyncio.run(
+        execute_run(
+            run_id=run.id,
+            database_path=database_path,
+            data_directory=tmp_path,
+            app_instance_id="test-app",
+            worker_id=run.worker_id or "",
+            catalog_factory=lambda: catalog,
+        )
+    )
+    assert result == 0
+
+    connection = open_database(database_path)
+    try:
+        metrics = MetricSampleRepository(connection).list_for_run(run.id)
+        raw = [
+            metric
+            for metric in metrics
+            if metric.metric_name == "fake.requests_total" and metric.aggregation == "raw"
+        ]
+        delta = next(
+            metric
+            for metric in metrics
+            if metric.metric_name == "fake.requests_total" and metric.aggregation == "delta"
+        )
+        assert [(metric.value, metric.labels["snapshot"]) for metric in raw] == [
+            (0, "before"),
+            (2, "after"),
+        ]
+        assert all(metric.adapter_id == "localforge.fake" for metric in raw)
+        assert all(metric.engine_version == "fake-1" for metric in raw)
+        assert delta.value == 2
+        assert delta.metric_kind == "counter"
+    finally:
+        connection.close()
+
+
+def test_open_loop_late_dispatch_emits_one_load_generator_saturation_warning(tmp_path) -> None:
+    database_path = tmp_path / "load-saturation.sqlite3"
+    initialize_database(database_path)
+    connection = open_database(database_path)
+    try:
+        run, plan, _, workload = _worker_fixture(connection)
+        RecordRepository(connection, BenchmarkPlan).update(
+            BenchmarkPlan.model_validate(plan.model_dump(mode="python") | {"measured_requests": 2})
+        )
+        RecordRepository(connection, Workload).update(
+            Workload.model_validate(
+                workload.model_dump(mode="python")
+                | {
+                    "request_count": 2,
+                    "traffic_mode": TrafficMode.OPEN_LOOP,
+                    "arrival_rate_per_second": 1_000,
+                }
+            )
+        )
+    finally:
+        connection.close()
+
+    first_token_gate = asyncio.Event()
+    scenario = FakeEngineScenario(first_token_gate=first_token_gate)
+    catalog = AdapterCatalog()
+    catalog.register(FakeEngineAdapter(scenario))
+
+    async def execute_after_releasing_gate() -> int:
+        async def release() -> None:
+            await asyncio.sleep(0.05)
+            first_token_gate.set()
+
+        release_task = asyncio.create_task(release())
+        try:
+            return await execute_run(
+                run_id=run.id,
+                database_path=database_path,
+                data_directory=tmp_path,
+                app_instance_id="test-app",
+                worker_id=run.worker_id or "",
+                catalog_factory=lambda: catalog,
+            )
+        finally:
+            await release_task
+
+    assert asyncio.run(execute_after_releasing_gate()) == 0
+
+    connection = open_database(database_path)
+    try:
+        warnings = [
+            event
+            for event in list_run_events(connection, run.id)
+            if event.event_type == "warning"
+            and event.payload.get("code") == "load_generator_saturated"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0].payload["queue_delay_ms"] > 5
     finally:
         connection.close()
 
@@ -531,12 +814,46 @@ def test_run_api_executes_in_child_process_and_replays_sanitized_events(tmp_path
         assert any(event["event_type"] == "request_started" for event in events)
         assert any(event["event_type"] == "engine_usage" for event in events)
         assert any(event["event_type"] == "request_completed" for event in events)
+        run_metric_events = [event for event in events if event["event_type"] == "run_metric"]
+        assert run_metric_events
+        attempted_event = next(
+            event
+            for event in run_metric_events
+            if event["payload"].get("metric_name") == "requests_attempted"
+        )
+        assert attempted_event["payload"]["formula"] == "count of measurement request records"
+        assert attempted_event["payload"]["method_version"] == "localforge.metrics.v1"
+        assert attempted_event["payload"]["labels"]["concurrency_level"] == "1"
+        assert all(
+            "metric_name" in event["payload"]
+            and "formula" in event["payload"]
+            and "labels" in event["payload"]
+            for event in run_metric_events
+        )
+        completed_status = next(
+            event
+            for event in events
+            if event["event_type"] == "run_status" and event["payload"].get("to") == "completed"
+        )
+        assert (
+            max(event["sequence_number"] for event in run_metric_events)
+            < completed_status["sequence_number"]
+        )
         system_event = next(event for event in events if event["event_type"] == "system_sample")
         assert system_event["payload"]["process_id"] != os.getpid()
         assert "LOCALFORGE synthetic benchmark request" not in json.dumps(events)
         samples = client.get(f"/api/v1/runs/{run_id}/samples").json()["samples"]
         assert len(samples) == 3
         assert all(sample["prompt_text"] is None for sample in samples)
+        metrics_response = client.get(f"/api/v1/runs/{run_id}/metrics")
+        assert metrics_response.status_code == 200
+        persisted_metrics = metrics_response.json()["metrics"]
+        attempted_metric = next(
+            item for item in persisted_metrics if item["metric_name"] == "requests_attempted"
+        )
+        assert attempted_metric["value"] == 3
+        assert attempted_metric["formula"] == "count of measurement request records"
+        assert attempted_metric["method_version"] == "localforge.metrics.v1"
         sample_page = client.get(f"/api/v1/runs/{run_id}/samples?limit=2").json()
         assert [sample["sequence_number"] for sample in sample_page["samples"]] == [0, 1]
         assert sample_page["next_sequence_number"] == 1
@@ -603,6 +920,21 @@ def test_worker_process_death_interrupts_run_and_keeps_completed_samples(tmp_pat
         assert current["status"] == "interrupted", current
         assert current["error_code"] == "worker_exited"
         assert len(client.get(f"/api/v1/runs/{run_id}/samples").json()["samples"]) >= 1
+        metrics = client.get(f"/api/v1/runs/{run_id}/metrics").json()["metrics"]
+        assert (
+            next(item for item in metrics if item["metric_name"] == "requests_attempted")["value"]
+            >= 1
+        )
+        events = client.get(f"/api/v1/runs/{run_id}/events").json()["events"]
+        terminal_event = next(
+            event
+            for event in events
+            if event["event_type"] == "run_status" and event["payload"].get("to") == "interrupted"
+        )
+        metric_sequences = [
+            event["sequence_number"] for event in events if event["event_type"] == "run_metric"
+        ]
+        assert metric_sequences and max(metric_sequences) < terminal_event["sequence_number"]
 
 
 def test_run_api_cancellation_stops_dispatch_and_preserves_samples(tmp_path) -> None:

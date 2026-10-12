@@ -11,11 +11,17 @@ from localforge.core.models import (
     BenchmarkRun,
     BenchmarkRunStatus,
     JsonValue,
+    MetricSource,
     RunEventRecord,
     utc_now,
 )
+from localforge.metrics import persist_derived_run_metrics
 from localforge.storage.database import transaction
-from localforge.storage.repositories import RecordRepository
+from localforge.storage.repositories import (
+    MetricSampleRepository,
+    RecordRepository,
+    RequestSampleRepository,
+)
 
 ACTIVE_RUN_STATUSES = frozenset(
     {
@@ -380,6 +386,66 @@ def emit_run_event(
     return append_run_event(connection, run_id, event_type, payload, request_id=request_id)
 
 
+def finalize_request_metrics(connection: sqlite3.Connection, run_id: UUID) -> None:
+    """Finalize incomplete requests, persist run summaries, and emit their replay events."""
+
+    RequestSampleRepository(connection).interrupt_incomplete_for_run(run_id)
+    metrics = persist_derived_run_metrics(connection, run_id)
+    if not metrics:
+        metrics = [
+            metric
+            for metric in MetricSampleRepository(connection).list_for_run(run_id)
+            if metric.source in {MetricSource.DERIVED, MetricSource.CLIENT_MEASURED}
+            and metric.aggregation not in {"raw", "delta"}
+        ]
+    existing_events = connection.execute(
+        "SELECT payload_json FROM run_events WHERE run_id = ? AND event_type = 'run_metric'",
+        (str(run_id),),
+    ).fetchall()
+    emitted_keys: set[tuple[str, str, str]] = set()
+    for row in existing_events:
+        payload = json.loads(row["payload_json"])
+        if not isinstance(payload, dict):
+            continue
+        metric_name = payload.get("metric_name")
+        aggregation = payload.get("aggregation")
+        if isinstance(metric_name, str) and isinstance(aggregation, str):
+            emitted_keys.add(
+                (
+                    metric_name,
+                    aggregation,
+                    json.dumps(payload.get("labels", {}), sort_keys=True, separators=(",", ":")),
+                )
+            )
+    for metric in metrics:
+        event_key = (
+            metric.metric_name,
+            metric.aggregation,
+            json.dumps(metric.labels, sort_keys=True, separators=(",", ":")),
+        )
+        if event_key in emitted_keys:
+            continue
+        emit_run_event(
+            connection,
+            run_id,
+            "run_metric",
+            {
+                "metric_name": metric.metric_name,
+                "aggregation": metric.aggregation,
+                "value": metric.value,
+                "unit": metric.unit,
+                "source": metric.source.value,
+                "sample_count": metric.sample_count,
+                "definition": metric.definition,
+                "formula": metric.formula,
+                "method_version": metric.method_version,
+                "quality_flags": cast(JsonValue, metric.quality_flags),
+                "labels": cast(JsonValue, metric.labels),
+            },
+        )
+        emitted_keys.add(event_key)
+
+
 def list_run_events(
     connection: sqlite3.Connection,
     run_id: UUID,
@@ -457,6 +523,7 @@ def recover_runs_on_startup(
     for run in runs:
         if run.status not in ACTIVE_RUN_STATUSES:
             continue
+        finalize_request_metrics(connection, run.id)
         transition_run(
             connection,
             run.id,
@@ -488,6 +555,7 @@ def reconcile_stale_workers(
         try:
             run = RecordRepository(connection, BenchmarkRun).get(run_id)
             if run is not None and run.status in ACTIVE_RUN_STATUSES:
+                finalize_request_metrics(connection, run_id)
                 transition_run(
                     connection,
                     run_id,

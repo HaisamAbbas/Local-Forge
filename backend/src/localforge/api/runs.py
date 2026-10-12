@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from localforge.api.dependencies import DatabaseConnection
 from localforge.api.schemas import (
     RunEventPage,
+    RunMetricsResponse,
     RunSamplesResponse,
     RunStartRequest,
     RunStartResponse,
@@ -39,12 +40,17 @@ from localforge.runs import (
     InvalidRunTransition,
     ResourceLockConflict,
     create_queued_run,
+    finalize_request_metrics,
     list_run_events,
     reconcile_stale_workers,
     transition_run,
 )
 from localforge.storage.database import open_database
-from localforge.storage.repositories import RecordRepository, RequestSampleRepository
+from localforge.storage.repositories import (
+    MetricSampleRepository,
+    RecordRepository,
+    RequestSampleRepository,
+)
 
 router = APIRouter(prefix="/api/v1")
 WORKER_SHUTDOWN_GRACE_SECONDS = 3.0
@@ -301,6 +307,14 @@ def get_run_samples(
     )
 
 
+@router.get("/runs/{run_id}/metrics", response_model=RunMetricsResponse, tags=["runs"])
+def get_run_metrics(run_id: UUID, connection: DatabaseConnection) -> RunMetricsResponse:
+    if RecordRepository(connection, BenchmarkRun).get(run_id) is None:
+        raise _not_found()
+    metrics = MetricSampleRepository(connection).list_for_run(run_id)
+    return RunMetricsResponse(metrics=metrics)
+
+
 @router.get("/runs/{run_id}/events", response_model=RunEventPage, tags=["runs"])
 def get_run_events(
     run_id: UUID,
@@ -413,6 +427,7 @@ async def monitor_run_workers(application: FastAPI) -> None:
                         datetime.now(UTC) - timedelta(seconds=WORKER_STALE_SECONDS)
                     )
                     if exit_code is not None or stale:
+                        finalize_request_metrics(connection, run_id)
                         transition_run(
                             connection,
                             run_id,
@@ -501,6 +516,7 @@ async def shutdown_run_workers(application: FastAPI) -> None:
         try:
             run = RecordRepository(connection, BenchmarkRun).get(UUID(run_key))
             if run is not None and run.status in ACTIVE_RUN_STATUSES:
+                finalize_request_metrics(connection, run.id)
                 transition_run(
                     connection,
                     run.id,
