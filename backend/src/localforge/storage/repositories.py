@@ -180,10 +180,20 @@ class RequestSampleRepository:
             return None
         return RequestSample.model_validate(json.loads(row["payload_json"]))
 
-    def list_for_run(self, run_id: UUID) -> list[RequestSample]:
+    def list_for_run(
+        self,
+        run_id: UUID,
+        *,
+        after_sequence_number: int = -1,
+        limit: int = 500,
+    ) -> list[RequestSample]:
+        if after_sequence_number < -1 or not 1 <= limit <= 1000:
+            raise ValueError("sample cursor or page size is out of range")
         rows = self._connection.execute(
-            "SELECT payload_json FROM request_samples WHERE run_id = ? ORDER BY sequence_number",
-            (str(run_id),),
+            """SELECT payload_json FROM request_samples
+               WHERE run_id = ? AND sequence_number > ?
+               ORDER BY sequence_number LIMIT ?""",
+            (str(run_id), after_sequence_number, limit),
         ).fetchall()
         return [RequestSample.model_validate(json.loads(row["payload_json"])) for row in rows]
 
@@ -273,6 +283,10 @@ def delete_benchmark_run(connection: sqlite3.Connection, run_id: UUID) -> bool:
     with transaction(connection):
         connection.execute("DELETE FROM request_samples WHERE run_id = ?", (str(run_id),))
         connection.execute("DELETE FROM metric_samples WHERE run_id = ?", (str(run_id),))
+        connection.execute("DELETE FROM run_events WHERE run_id = ?", (str(run_id),))
+        connection.execute("DELETE FROM run_event_clocks WHERE run_id = ?", (str(run_id),))
+        connection.execute("DELETE FROM resource_locks WHERE run_id = ?", (str(run_id),))
+        connection.execute("DELETE FROM worker_leases WHERE run_id = ?", (str(run_id),))
         cursor = connection.execute(
             "DELETE FROM domain_records WHERE entity_type = ? AND id = ?",
             (BenchmarkRun.__name__, str(run_id)),

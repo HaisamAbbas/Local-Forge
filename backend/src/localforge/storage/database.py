@@ -109,7 +109,95 @@ def _migration_2(connection: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS: dict[int, Migration] = {1: _migration_1, 2: _migration_2}
+def _migration_3(connection: sqlite3.Connection) -> None:
+    """Add replayable run events, worker leases, and per-resource locks."""
+
+    connection.execute(
+        """
+        CREATE TABLE run_events (
+            run_id TEXT NOT NULL,
+            sequence_number INTEGER NOT NULL CHECK (sequence_number >= 0),
+            event_type TEXT NOT NULL,
+            request_id TEXT,
+            monotonic_offset_ms REAL NOT NULL CHECK (monotonic_offset_ms >= 0),
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+            PRIMARY KEY (run_id, sequence_number)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX run_events_type_idx ON run_events(run_id, event_type, sequence_number)"
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER run_events_require_run
+        BEFORE INSERT ON run_events
+        WHEN NOT EXISTS (
+            SELECT 1 FROM domain_records
+            WHERE entity_type = 'BenchmarkRun' AND id = NEW.run_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'run event benchmark run does not exist');
+        END
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE run_event_clocks (
+            run_id TEXT PRIMARY KEY,
+            origin_monotonic_ns INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE worker_leases (
+            run_id TEXT PRIMARY KEY,
+            app_instance_id TEXT NOT NULL,
+            worker_id TEXT NOT NULL,
+            process_id INTEGER,
+            heartbeat_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute("CREATE INDEX worker_leases_heartbeat_idx ON worker_leases(heartbeat_at)")
+    connection.execute(
+        """
+        CREATE TABLE resource_locks (
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            app_instance_id TEXT NOT NULL,
+            worker_id TEXT NOT NULL,
+            acquired_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            override_contention INTEGER NOT NULL CHECK (override_contention IN (0, 1)),
+            PRIMARY KEY (resource_type, resource_id, run_id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX resource_locks_resource_idx ON resource_locks(resource_type, resource_id)"
+    )
+    connection.execute("CREATE INDEX resource_locks_expiry_idx ON resource_locks(expires_at)")
+
+
+def _migration_4(connection: sqlite3.Connection) -> None:
+    """Record the payload contract version beside each persisted run event."""
+
+    connection.execute(
+        """ALTER TABLE run_events
+           ADD COLUMN event_version INTEGER NOT NULL DEFAULT 1 CHECK (event_version > 0)"""
+    )
+
+
+MIGRATIONS: dict[int, Migration] = {
+    1: _migration_1,
+    2: _migration_2,
+    3: _migration_3,
+    4: _migration_4,
+}
 CURRENT_SCHEMA_VERSION = max(MIGRATIONS, default=0)
 
 

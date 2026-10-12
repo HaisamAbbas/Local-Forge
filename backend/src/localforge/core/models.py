@@ -563,7 +563,10 @@ class BenchmarkPlan(DomainModel):
 class BenchmarkRunStatus(StrEnum):
     QUEUED = "queued"
     PREFLIGHT = "preflight"
+    PREPARING = "preparing"
+    WARMING = "warming"
     RUNNING = "running"
+    CANCELLING = "cancelling"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -574,6 +577,7 @@ class BenchmarkRun(DomainModel):
     plan_id: UUID
     status: BenchmarkRunStatus = BenchmarkRunStatus.QUEUED
     worker_id: str | None = None
+    potentially_contended: bool = False
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_code: str | None = None
@@ -585,6 +589,33 @@ class BenchmarkRun(DomainModel):
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("timestamp must include a timezone")
         return value.astimezone(UTC) if value is not None else None
+
+
+class RunEventRecord(SchemaModel):
+    """Version-one sanitized event stored for replay and SSE delivery."""
+
+    schema_version: Literal[1] = 1
+    run_id: UUID
+    sequence_number: int = Field(ge=0)
+    event_type: str = Field(min_length=1, max_length=80)
+    request_id: UUID | None = None
+    monotonic_offset_ms: float = Field(ge=0)
+    occurred_at: datetime = Field(default_factory=utc_now)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def event_timestamp_must_be_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must include a timezone")
+        return value.astimezone(UTC)
+
+    @field_validator("monotonic_offset_ms")
+    @classmethod
+    def event_offset_must_be_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("monotonic offset must be finite")
+        return value
 
 
 class RequestOutcome(StrEnum):
