@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
+import { WorkloadsScreen } from "./components/WorkloadsScreen";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
 
 const navigation = [
@@ -116,6 +117,8 @@ export function App() {
             <EnginesScreen />
           ) : activeScreen === "system" ? (
             <SystemScreen />
+          ) : activeScreen === "workloads" ? (
+            <WorkloadsScreen />
           ) : (
             <SectionEmptyState label={currentScreen.label} />
           )}
