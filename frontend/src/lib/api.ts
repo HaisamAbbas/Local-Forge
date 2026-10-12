@@ -129,9 +129,21 @@ export type EngineModel = {
 export type BenchmarkRun = {
   id: string;
   plan_id: string;
-  status: string;
+  status:
+    | "queued"
+    | "preflight"
+    | "preparing"
+    | "warming"
+    | "running"
+    | "cancelling"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
+    | string;
   worker_id: string | null;
   potentially_contended: boolean;
+  profile_snapshot?: RunProfileSnapshot;
   started_at: string | null;
   completed_at: string | null;
   error_code: string | null;
@@ -139,6 +151,108 @@ export type BenchmarkRun = {
   created_at: string;
   updated_at: string;
 };
+
+export type RunProfileSnapshot = {
+  captured_at: string;
+  machine_profile_id: string | null;
+  machine: Pick<MachineProfile, "id" | "label" | "status" | "hardware"> | null;
+  engine: Pick<
+    EngineProfile,
+    | "id"
+    | "label"
+    | "adapter_id"
+    | "engine_display_name"
+    | "adapter_version"
+    | "engine_version"
+    | "integration_mode"
+    | "capabilities"
+    | "selected_model_ref"
+  > | null;
+};
+
+export type RunEventRecord = {
+  schema_version: 1;
+  run_id: string;
+  sequence_number: number;
+  event_type: string;
+  request_id: string | null;
+  monotonic_offset_ms: number;
+  occurred_at: string;
+  payload: Record<string, unknown>;
+};
+
+export type RequestSample = {
+  id: string;
+  run_id: string;
+  sequence_number: number;
+  request_id: string | null;
+  phase: "warmup" | "measurement";
+  concurrency_level: number | null;
+  effective_concurrency: number | null;
+  outcome:
+    | "in_progress"
+    | "succeeded"
+    | "failed"
+    | "timed_out"
+    | "cancelled"
+    | "disconnected"
+    | "interrupted";
+  started_at: string;
+  completed_at: string | null;
+  dispatch_offset_ms: number | null;
+  first_output_offset_ms: number | null;
+  completed_offset_ms: number | null;
+  queue_time_ms: number | null;
+  latency_ms: number | null;
+  ttft_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  prompt_token_count_source: string;
+  completion_token_count_source: string;
+  error_class: string | null;
+  output_event_count: number;
+  output_characters: number;
+  partial_output_observed: boolean;
+  content_retained: boolean;
+  prompt_text?: string | null;
+  output_text?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MetricSample = {
+  id: string;
+  run_id: string;
+  metric_name: string;
+  value: number | null;
+  unit: string;
+  source: "client_measured" | "engine_native" | "system_observed" | "derived" | "user_supplied";
+  aggregation: string;
+  sample_count: number;
+  definition: string;
+  formula: string;
+  method_version: string;
+  quality_flags: string[];
+  metric_kind: "gauge" | "counter";
+  adapter_id: string | null;
+  adapter_version: string | null;
+  engine_version: string | null;
+  observed_at: string;
+  labels: Record<string, string>;
+};
+
+export type RunEventPage = {
+  events: RunEventRecord[];
+  next_sequence_number: number | null;
+  terminal: boolean;
+};
+
+export type RunSamplesResponse = {
+  samples: RequestSample[];
+  next_sequence_number: number | null;
+};
+
+export type RunMetricsResponse = { metrics: MetricSample[] };
 
 export type Dataset = {
   id: string;
@@ -373,7 +487,18 @@ export const listEngineCatalog = () => apiRequest<AdapterManifest[]>("/api/v1/en
 export const listEngineProfiles = () => apiRequest<EngineProfile[]>("/api/v1/engines");
 export const fetchSystemProfile = () => apiRequest<MachineProfile>("/api/v1/system");
 export const listMachineProfiles = () => apiRequest<MachineProfile[]>("/api/v1/machine-profiles");
-export const listRuns = () => apiRequest<BenchmarkRun[]>("/api/v1/runs?limit=10");
+export const listRuns = (limit = 100) => apiRequest<BenchmarkRun[]>(`/api/v1/runs?limit=${limit}`);
+export const getRun = (id: string) => apiRequest<BenchmarkRun>(`/api/v1/runs/${id}`);
+export const cancelBenchmarkRun = (id: string) =>
+  apiRequest<BenchmarkRun>(`/api/v1/runs/${id}/cancel`, { method: "POST", body: "{}" });
+export const listRunEvents = (id: string, after = -1, limit = 1000) =>
+  apiRequest<RunEventPage>(`/api/v1/runs/${id}/events?after=${after}&limit=${limit}`);
+export const listRunSamples = (id: string, after = -1, limit = 1000, incompleteOnly = false) =>
+  apiRequest<RunSamplesResponse>(
+    `/api/v1/runs/${id}/samples?after=${after}&limit=${limit}&incomplete_only=${incompleteOnly}`,
+  );
+export const listRunMetrics = (id: string) =>
+  apiRequest<RunMetricsResponse>(`/api/v1/runs/${id}/metrics`);
 export const listDatasets = () => apiRequest<Dataset[]>("/api/v1/datasets");
 export const listWorkloads = () => apiRequest<Workload[]>("/api/v1/workloads");
 export const listBenchmarkPlans = () => apiRequest<BenchmarkPlan[]>("/api/v1/benchmark-plans");
