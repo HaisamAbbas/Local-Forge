@@ -58,12 +58,15 @@ through `/api/v1/workloads` or `/api/v1/workloads/presets`; JSONL and CSV datase
 `/api/v1/datasets/import` using a multipart upload. Dataset prompt bodies are retained only when the
 import explicitly opts in. Benchmark plans report blockers and warnings at
 `/api/v1/benchmark-plans/preflight` and save the selected dataset snapshot hash with the plan.
-Start a saved plan with `POST /api/v1/runs` and its `plan_id`; read run state, samples, and events at
-`/api/v1/runs/{run_id}`, `/samples`, and `/events`. Event history supports sequence-cursor replay or
-Server-Sent Events at `/api/v1/runs/{run_id}/events/stream`. Cancel an active run with
+Start a saved plan with `POST /api/v1/runs` and its `plan_id`; read run state at
+`/api/v1/runs/{run_id}`, samples at `/api/v1/runs/{run_id}/samples`, metrics at
+`/api/v1/runs/{run_id}/metrics`, and events at `/api/v1/runs/{run_id}/events`. Event history supports
+sequence-cursor replay or Server-Sent Events at `/api/v1/runs/{run_id}/events/stream`. Cancel an active run with
 `POST /api/v1/runs/{run_id}/cancel`. Resource collisions return `409`; retry with
 `override_contention: true` only after reviewing the warning. Events never contain request bodies;
 samples retain prompt and output text only when the saved plan explicitly enables retention.
+Metric formulas, provenance, percentile minimums, and quality flags are documented in
+[`docs/metrics.md`](docs/metrics.md).
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:

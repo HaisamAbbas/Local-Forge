@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-6 are implemented and verified; Prompt 7 is next.
+**Status:** Prompts 0-7 are implemented and verified; Prompt 8 is next.
 **Reviewed:** 12 October 2026  
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -337,7 +337,7 @@ Backend, from `backend/`:
 ### Scope and limitations
 
 - The worker currently loads the built-in fake adapter. It verifies coordinator behavior but does not contact a model or produce valid inference performance results. Adapter plugin loading and real-engine requests remain later phases.
-- Host system sampling is explicitly unavailable in the current `system_sample` event. Prompt 7 owns measured resource telemetry and metric formulas.
+- Host system sampling remains unavailable in the current `system_sample` event. Prompt 7 adds client request metrics, optional engine-native metrics, and load-generation warnings; it does not claim CPU, GPU, memory, or power telemetry.
 - The worker caps concurrent request tasks at 128 and emits a warning when a plan requests more. This is a bounded execution guard, not a claim that the requested concurrency was achieved.
 - The dashboard is not yet connected to run APIs; live run UI is scheduled for Prompt 10.
 
@@ -358,3 +358,42 @@ Frontend, from `frontend/`:
 - `npm run test` — passed (2 tests).
 - `npm run build` — passed.
 - `npm run e2e` — passed (1 Chromium smoke test).
+
+## Prompt 7 completion record
+
+### Delivered
+
+- Persisted each request at dispatch and finalized it with measurement/warmup phase, requested/effective concurrency, request outcome, monotonic dispatch/first-output/completion offsets, latency, TTFT, queue delay, token counts and provenance, partial-output state, output event/character counts, and a sanitized error class.
+- Warmup records remain available in raw samples but are excluded from run aggregates. Interrupted in-flight records retain observed stream timing and partial-output metadata without inventing an end-to-end duration.
+- Added versioned, formula-bearing client summaries for latency, TTFT, queue time, chunk/event timing, token-timestamp ITL, exact-token TPOT, input/output/generation/request throughput, outcome counts, and error rate. Sweep summaries are kept separate by concurrency level. Every stored summary includes unit, source, method version, sample count, definition, formula, and quality flags.
+- Added R-7 percentiles with explicit minimum counts (p50: 1, p90: 10, p95: 20, p99: 100); insufficient tails remain null with a warning flag.
+- Preserved before/after native metric observations and provenance, checked counter resets, negative counters, missing snapshots, unit/kind changes, and stored valid counter deltas. Added `GET /api/v1/runs/{run_id}/metrics`.
+- Added an open-loop late-dispatch warning, plus recovery of in-flight request samples during worker/app interruption. The fake adapter's optional request counter now advances with each generated request.
+- Documented metric definitions and limitations in `docs/metrics.md`; the API-backed metrics view is scheduled for Prompt 10.
+
+### Scope and limitations
+
+- The worker currently uses only the deterministic fake adapter. Its measured request timings exercise the pipeline and are not model-performance results.
+- Host CPU/GPU/memory/power sampling is still unavailable. ITL remains unavailable unless an adapter supplies token timestamps; TPOT is only derived from a successful stream with an exact token count and observed first-output/end offsets. No character-based token estimate is produced.
+- Run metrics are persisted on finalization. Live metric presentation is a later frontend phase.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format src tests` — passed (51 files formatted or unchanged).
+- `uv run --locked ruff format --check src tests` — passed.
+- `uv run --locked ruff check src tests` — passed.
+- `uv run --locked mypy src` — passed (32 source files).
+- `uv run --locked pytest -q` — passed (111 tests).
+
+Frontend, from `frontend/` (no frontend files changed in this phase):
+
+- `npm run format:check` — passed.
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm run test` — passed (2 tests).
+- `npm run build` — passed.
+- `npm run e2e` — passed (1 Chromium smoke test).
+
+Repository diff check: `git diff --check` — passed. No external engine or model download was required.
