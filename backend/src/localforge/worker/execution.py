@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import random
 import sqlite3
 import time
 from collections import Counter
@@ -33,6 +34,7 @@ from localforge.core.models import (
     EngineProfile,
     JsonValue,
     ModelArtifact,
+    PromptSizingMethod,
     RequestOutcome,
     RequestSample,
     TokenCountSource,
@@ -75,6 +77,48 @@ class RunSetupError(RuntimeError):
 
 class AdapterDrainTimeoutError(RuntimeError):
     """Raised after a request outlives the worker's bounded cancellation drain."""
+
+
+_SYNTHETIC_WORDS = (
+    "analysis",
+    "batch",
+    "context",
+    "decode",
+    "engine",
+    "inference",
+    "latency",
+    "model",
+    "prompt",
+    "request",
+    "response",
+    "throughput",
+    "token",
+    "workload",
+)
+
+
+def _synthetic_prompt(workload: Workload, index: int) -> str:
+    """Build a repeatable approximate input with the configured seed and size method."""
+
+    rng = random.Random(workload.random_seed + index)
+    target = workload.target_input_tokens
+    if workload.prompt_sizing_method is PromptSizingMethod.WORDS:
+        word_count = target if target is not None else 12
+        return " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(word_count))
+
+    if workload.prompt_sizing_method is PromptSizingMethod.CHARACTERS:
+        # Roughly four English characters per token; this is deliberately an estimate.
+        character_count = (target if target is not None else 12) * 4
+        template = " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(12)) + " "
+        repetitions = (character_count + len(template) - 1) // len(template)
+        return (template * repetitions)[:character_count]
+
+    if target is not None:
+        raise RunSetupError(
+            "tokenizer_unavailable",
+            "An exact tokenizer was requested for synthetic input sizing, but none is installed.",
+        )
+    return " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(12))
 
 
 def _finish_stop_request(connection: sqlite3.Connection, run: BenchmarkRun) -> None:
@@ -121,7 +165,7 @@ def _load_run_context(
     if workload.input_mode is WorkloadInputMode.SYNTHETIC:
 
         def prompt_for(index: int) -> str:
-            return f"LOCALFORGE synthetic benchmark request {index + 1}."
+            return _synthetic_prompt(workload, index)
 
     else:
         dataset = (
