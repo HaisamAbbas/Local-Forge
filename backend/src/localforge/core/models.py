@@ -619,24 +619,49 @@ class RunEventRecord(SchemaModel):
 
 
 class RequestOutcome(StrEnum):
+    IN_PROGRESS = "in_progress"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
     DISCONNECTED = "disconnected"
+    INTERRUPTED = "interrupted"
+
+
+class TokenCountSource(StrEnum):
+    UNAVAILABLE = "unavailable"
+    ENGINE_EXACT = "engine_exact"
+    ENGINE_ESTIMATED = "engine_estimated"
+    TOKENIZER_EXACT = "tokenizer_exact"
+    ESTIMATED = "estimated"
 
 
 class RequestSample(DomainModel):
     run_id: UUID
     sequence_number: int = Field(ge=0)
+    request_id: UUID | None = None
+    phase: Literal["warmup", "measurement"] = "measurement"
+    concurrency_level: int | None = Field(default=None, ge=1, le=100_000)
+    effective_concurrency: int | None = Field(default=None, ge=1, le=100_000)
     outcome: RequestOutcome
     started_at: datetime
     completed_at: datetime | None = None
+    dispatch_offset_ms: float | None = Field(default=None, ge=0)
+    first_output_offset_ms: float | None = Field(default=None, ge=0)
+    completed_offset_ms: float | None = Field(default=None, ge=0)
+    queue_time_ms: float | None = Field(default=None, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
     ttft_ms: float | None = Field(default=None, ge=0)
     inter_token_latency_ms: list[float] = Field(default_factory=list)
+    inter_event_latency_ms: list[float] = Field(default_factory=list)
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
+    prompt_token_count_source: TokenCountSource = TokenCountSource.UNAVAILABLE
+    completion_token_count_source: TokenCountSource = TokenCountSource.UNAVAILABLE
+    error_class: str | None = Field(default=None, max_length=80)
+    output_event_count: int = Field(default=0, ge=0)
+    output_characters: int = Field(default=0, ge=0)
+    partial_output_observed: bool = False
     prompt_reference: str | None = None
     output_reference: str | None = None
     redacted_summary: str | None = None
@@ -651,11 +676,11 @@ class RequestSample(DomainModel):
             raise ValueError("timestamp must include a timezone")
         return value.astimezone(UTC) if value is not None else None
 
-    @field_validator("inter_token_latency_ms")
+    @field_validator("inter_token_latency_ms", "inter_event_latency_ms")
     @classmethod
-    def token_latencies_must_be_finite(cls, values: list[float]) -> list[float]:
+    def event_latencies_must_be_finite(cls, values: list[float]) -> list[float]:
         if any(value < 0 or not math.isfinite(value) for value in values):
-            raise ValueError("token latencies must be finite and non-negative")
+            raise ValueError("event latencies must be finite and non-negative")
         return values
 
     @model_validator(mode="after")
@@ -678,16 +703,26 @@ class MetricSource(StrEnum):
 class MetricSample(DomainModel):
     run_id: UUID
     metric_name: str = Field(min_length=1, max_length=120)
-    value: float
+    value: float | None
     unit: str = Field(min_length=1, max_length=80)
     source: MetricSource
+    aggregation: str = Field(default="raw", min_length=1, max_length=40)
+    sample_count: int = Field(default=1, ge=0)
+    definition: str = Field(default="Raw metric observation", max_length=500)
+    formula: str = Field(default="reported value", max_length=500)
+    method_version: str = Field(default="localforge.metrics.v1", max_length=80)
+    quality_flags: list[str] = Field(default_factory=list, max_length=32)
+    metric_kind: Literal["gauge", "counter"] = "gauge"
+    adapter_id: str | None = None
+    adapter_version: str | None = None
+    engine_version: str | None = None
     observed_at: datetime = Field(default_factory=utc_now)
     labels: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("value")
     @classmethod
-    def metric_value_must_be_finite(cls, value: float) -> float:
-        if not math.isfinite(value):
+    def metric_value_must_be_finite(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
             raise ValueError("metric value must be finite")
         return value
 

@@ -192,11 +192,25 @@ def _migration_4(connection: sqlite3.Connection) -> None:
     )
 
 
+def _migration_5(connection: sqlite3.Connection) -> None:
+    """Index request outcome separately for bounded interruption recovery scans."""
+
+    connection.execute("ALTER TABLE request_samples ADD COLUMN outcome TEXT")
+    connection.execute(
+        "UPDATE request_samples SET outcome = json_extract(payload_json, '$.outcome')"
+    )
+    connection.execute(
+        "CREATE INDEX request_samples_run_outcome_idx "
+        "ON request_samples(run_id, outcome, sequence_number)"
+    )
+
+
 MIGRATIONS: dict[int, Migration] = {
     1: _migration_1,
     2: _migration_2,
     3: _migration_3,
     4: _migration_4,
+    5: _migration_5,
 }
 CURRENT_SCHEMA_VERSION = max(MIGRATIONS, default=0)
 

@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from localforge.core.models import (
     BenchmarkRun,
     DomainModel,
     MetricSample,
+    RequestOutcome,
     RequestSample,
 )
 from localforge.storage.database import transaction
@@ -134,7 +136,7 @@ class RecordRepository[RecordT: DomainModel]:
 
 
 class RequestSampleRepository:
-    """Append-only request sample storage with explicit inline-body opt-in."""
+    """Persist request lifecycle records with explicit inline-body opt-in."""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
@@ -153,8 +155,8 @@ class RequestSampleRepository:
             self._connection.execute(
                 """INSERT INTO request_samples
                    (id, run_id, sequence_number, schema_version, created_at, updated_at,
-                    content_retained, payload_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    content_retained, payload_json, outcome)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     sample_id,
                     str(sample.run_id),
@@ -164,6 +166,7 @@ class RequestSampleRepository:
                     updated_at,
                     int(sample.content_retained),
                     payload,
+                    sample.outcome.value,
                 ),
             )
         except sqlite3.IntegrityError as error:
@@ -171,6 +174,105 @@ class RequestSampleRepository:
                 f"request sample {sample_id} already exists or its run/sequence is invalid"
             ) from error
         return sample
+
+    def update(
+        self,
+        sample: RequestSample,
+        *,
+        allow_content_retention: bool = False,
+    ) -> RequestSample:
+        if (
+            sample.prompt_text is not None or sample.output_text is not None
+        ) and not allow_content_retention:
+            raise ContentRetentionNotEnabled(
+                "enable content retention in the benchmark plan before storing prompt/output bodies"
+            )
+        updated_at = max(datetime.now(UTC), sample.created_at, sample.updated_at)
+        updated = sample.model_copy(update={"updated_at": updated_at})
+        payload = _serialize(updated)
+        with transaction(self._connection):
+            cursor = self._connection.execute(
+                """UPDATE request_samples SET schema_version = ?, updated_at = ?,
+                   content_retained = ?, payload_json = ?, outcome = ?
+                   WHERE id = ? AND run_id = ?""",
+                (
+                    updated.schema_version,
+                    updated_at.isoformat(),
+                    int(updated.content_retained),
+                    payload,
+                    updated.outcome.value,
+                    str(updated.id),
+                    str(updated.run_id),
+                ),
+            )
+        if cursor.rowcount == 0:
+            raise RecordNotFound(f"request sample {updated.id} was not found")
+        return updated
+
+    def interrupt_incomplete_for_run(self, run_id: UUID) -> int:
+        """Finalize dispatched requests left in progress after a worker interruption."""
+
+        cursor = self._connection.execute(
+            """SELECT payload_json FROM request_samples
+               WHERE run_id = ? AND outcome = ?""",
+            (str(run_id), RequestOutcome.IN_PROGRESS.value),
+        )
+        interrupted = 0
+        while rows := cursor.fetchmany(100):
+            for row in rows:
+                sample = RequestSample.model_validate(json.loads(row["payload_json"]))
+                first_output_offset: float | None = None
+                previous_chunk_offset: float | None = None
+                inter_event_latencies: list[float] = []
+                output_characters = 0
+                output_event_count = 0
+                if sample.request_id is not None:
+                    event_cursor = self._connection.execute(
+                        """SELECT event_type, monotonic_offset_ms, payload_json FROM run_events
+                           WHERE run_id = ? AND request_id = ?
+                             AND event_type IN ('first_output', 'output_chunk')
+                           ORDER BY sequence_number""",
+                        (str(run_id), str(sample.request_id)),
+                    )
+                    while events := event_cursor.fetchmany(500):
+                        for event in events:
+                            if (
+                                event["event_type"] == "first_output"
+                                and first_output_offset is None
+                            ):
+                                first_output_offset = float(event["monotonic_offset_ms"])
+                            if event["event_type"] == "output_chunk":
+                                output_event_count += 1
+                                payload = json.loads(event["payload_json"])
+                                characters = payload.get("characters", 0)
+                                if isinstance(characters, int) and characters > 0:
+                                    output_characters += characters
+                                    chunk_offset = float(event["monotonic_offset_ms"])
+                                    if previous_chunk_offset is not None:
+                                        inter_event_latencies.append(
+                                            max(0.0, chunk_offset - previous_chunk_offset)
+                                        )
+                                    previous_chunk_offset = chunk_offset
+                updated = sample.model_copy(
+                    update={
+                        "outcome": RequestOutcome.INTERRUPTED,
+                        "error_class": "worker_interrupted",
+                        "first_output_offset_ms": first_output_offset,
+                        "ttft_ms": (
+                            max(0.0, first_output_offset - sample.dispatch_offset_ms)
+                            if first_output_offset is not None
+                            and sample.dispatch_offset_ms is not None
+                            else None
+                        ),
+                        "inter_event_latency_ms": inter_event_latencies,
+                        "output_event_count": output_event_count,
+                        "output_characters": output_characters,
+                        "partial_output_observed": output_characters > 0,
+                    }
+                )
+                self.update(updated, allow_content_retention=sample.content_retained)
+                interrupted += 1
+        return interrupted
 
     def get(self, sample_id: UUID) -> RequestSample | None:
         row = self._connection.execute(
@@ -187,15 +289,36 @@ class RequestSampleRepository:
         after_sequence_number: int = -1,
         limit: int = 500,
     ) -> list[RequestSample]:
-        if after_sequence_number < -1 or not 1 <= limit <= 1000:
+        return list(
+            self.iter_for_run(
+                run_id,
+                after_sequence_number=after_sequence_number,
+                limit=limit,
+            )
+        )
+
+    def iter_for_run(
+        self,
+        run_id: UUID,
+        *,
+        after_sequence_number: int = -1,
+        limit: int | None = None,
+    ) -> Iterator[RequestSample]:
+        """Yield samples in sequence order without materializing the full run in memory."""
+
+        if after_sequence_number < -1 or (limit is not None and not 1 <= limit <= 1000):
             raise ValueError("sample cursor or page size is out of range")
-        rows = self._connection.execute(
-            """SELECT payload_json FROM request_samples
-               WHERE run_id = ? AND sequence_number > ?
-               ORDER BY sequence_number LIMIT ?""",
-            (str(run_id), after_sequence_number, limit),
-        ).fetchall()
-        return [RequestSample.model_validate(json.loads(row["payload_json"])) for row in rows]
+        query = """SELECT payload_json FROM request_samples
+                   WHERE run_id = ? AND sequence_number > ?
+                   ORDER BY sequence_number"""
+        parameters: tuple[object, ...] = (str(run_id), after_sequence_number)
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters += (limit,)
+        cursor = self._connection.execute(query, parameters)
+        while rows := cursor.fetchmany(500):
+            for row in rows:
+                yield RequestSample.model_validate(json.loads(row["payload_json"]))
 
 
 class MetricSampleRepository:
