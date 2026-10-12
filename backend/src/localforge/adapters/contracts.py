@@ -201,6 +201,7 @@ class AdapterMetric(SchemaModel):
     value: float
     unit: str = Field(min_length=1, max_length=80)
     source: MetricSource
+    kind: Literal["gauge", "counter"] = "gauge"
     labels: dict[str, str] = Field(default_factory=dict)
     observed_at: datetime = Field(default_factory=utc_now)
 
