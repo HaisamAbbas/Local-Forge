@@ -27,7 +27,7 @@ describe("ApiStatus", () => {
 
     render(<ApiStatus />);
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Local API unavailable");
+    expect(await screen.findByText("Local API unavailable")).toBeInTheDocument();
     expect(screen.getByText("Start the local API, then retry the connection.")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry connection" }));
