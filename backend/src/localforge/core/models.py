@@ -269,6 +269,8 @@ class ModelArtifact(EngineSpecificDomainModel):
     revision: str | None = None
     format: str | None = None
     size_bytes: int | None = Field(default=None, ge=0)
+    tokenizer_identity: str | None = None
+    max_context_tokens: int | None = Field(default=None, ge=1)
     status: ModelArtifactStatus = ModelArtifactStatus.UNKNOWN
 
 
@@ -285,6 +287,23 @@ class DatasetStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+class DatasetFormat(StrEnum):
+    JSONL = "jsonl"
+    CSV = "csv"
+
+
+class PromptSizingMethod(StrEnum):
+    CHARACTERS = "characters"
+    WORDS = "words"
+    TOKENIZER = "tokenizer"
+
+
+class DuplicatePolicy(StrEnum):
+    KEEP = "keep"
+    SKIP = "skip"
+    ERROR = "error"
+
+
 class Dataset(DomainModel):
     name: str = Field(min_length=1, max_length=160)
     source: DatasetSource
@@ -292,8 +311,29 @@ class Dataset(DomainModel):
     description: str | None = None
     item_count: int | None = Field(default=None, ge=0)
     content_hash: str | None = None
+    snapshot_hash: str | None = None
+    content_retained: bool = False
+    format: DatasetFormat | None = None
+    prompt_field: str | None = Field(default=None, max_length=120)
+    expected_answer_field: str | None = Field(default=None, max_length=120)
+    row_limit: int | None = Field(default=None, ge=1, le=100_000)
+    shuffle_seed: int | None = Field(default=None, ge=0, le=2**63 - 1)
+    duplicate_policy: DuplicatePolicy | None = None
+    prompt_sizing_method: PromptSizingMethod | None = None
+    tokenizer_identity: str | None = Field(default=None, max_length=160)
+    count_method: str | None = None
+    duplicate_count: int = Field(default=0, ge=0)
     storage_ref: str | None = None
     redacted_summary: str | None = None
+
+
+class WorkloadPreset(StrEnum):
+    FIXED_PREFILL = "fixed_prefill"
+    FIXED_DECODE = "fixed_decode"
+    MIXED_CHAT = "mixed_chat"
+    CONCURRENCY_SWEEP = "concurrency_sweep"
+    TARGET_REQUEST_RATE = "target_request_rate"
+    LONG_CONTEXT = "long_context"
 
 
 class WorkloadKind(StrEnum):
@@ -312,16 +352,30 @@ class WorkloadStatus(StrEnum):
     INVALID = "invalid"
 
 
+class TrafficMode(StrEnum):
+    CLOSED_LOOP = "closed_loop"
+    OPEN_LOOP = "open_loop"
+
+
 class Workload(DomainModel):
     name: str = Field(min_length=1, max_length=160)
     kind: WorkloadKind
     status: WorkloadStatus = WorkloadStatus.DRAFT
     input_mode: WorkloadInputMode
     dataset_id: UUID | None = None
-    request_count: int = Field(ge=1)
+    preset: WorkloadPreset | None = None
+    request_count: int | None = Field(default=100, ge=1, le=1_000_000)
+    duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
     concurrency: int = Field(default=1, ge=1)
+    concurrency_levels: list[int] = Field(default_factory=list, max_length=32)
+    traffic_mode: TrafficMode = TrafficMode.CLOSED_LOOP
+    arrival_rate_per_second: float | None = Field(default=None, gt=0, le=100_000)
+    warmup_count: int = Field(default=0, ge=0, le=100_000)
     target_input_tokens: int | None = Field(default=None, ge=1)
     target_output_tokens: int | None = Field(default=None, ge=1)
+    max_output_tokens: int = Field(default=256, ge=1, le=1_000_000)
+    prompt_sizing_method: PromptSizingMethod = PromptSizingMethod.CHARACTERS
+    random_seed: int = Field(default=0, ge=0, le=2**63 - 1)
     sampling_config: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -330,7 +384,123 @@ class Workload(DomainModel):
             raise ValueError("dataset_id is required when input_mode is dataset")
         if self.input_mode == WorkloadInputMode.SYNTHETIC and self.dataset_id is not None:
             raise ValueError("dataset_id must be empty for a synthetic workload")
+        if self.request_count is None and self.duration_seconds is None:
+            raise ValueError("request_count or duration_seconds is required")
+        if self.traffic_mode is TrafficMode.OPEN_LOOP and self.arrival_rate_per_second is None:
+            raise ValueError("arrival_rate_per_second is required for open-loop traffic")
+        if (
+            self.traffic_mode is TrafficMode.CLOSED_LOOP
+            and self.arrival_rate_per_second is not None
+        ):
+            raise ValueError("arrival_rate_per_second is only valid for open-loop traffic")
+        if self.preset is WorkloadPreset.CONCURRENCY_SWEEP and not self.concurrency_levels:
+            raise ValueError("concurrency_levels are required for a concurrency sweep")
+        if self.preset is not None:
+            expected_kind = {
+                WorkloadPreset.FIXED_PREFILL: WorkloadKind.COMPLETION,
+                WorkloadPreset.FIXED_DECODE: WorkloadKind.COMPLETION,
+                WorkloadPreset.MIXED_CHAT: WorkloadKind.CHAT,
+                WorkloadPreset.CONCURRENCY_SWEEP: WorkloadKind.CHAT,
+                WorkloadPreset.TARGET_REQUEST_RATE: WorkloadKind.CHAT,
+                WorkloadPreset.LONG_CONTEXT: WorkloadKind.COMPLETION,
+            }[self.preset]
+            if self.kind is not expected_kind:
+                raise ValueError("workload kind does not match the selected preset")
+        if (
+            self.preset is WorkloadPreset.CONCURRENCY_SWEEP
+            and self.traffic_mode is not TrafficMode.CLOSED_LOOP
+        ):
+            raise ValueError("concurrency sweeps require closed-loop traffic")
+        if (
+            self.preset is WorkloadPreset.TARGET_REQUEST_RATE
+            and self.traffic_mode is not TrafficMode.OPEN_LOOP
+        ):
+            raise ValueError("target request-rate workloads require open-loop traffic")
+        if any(level < 1 for level in self.concurrency_levels) or self.concurrency_levels != sorted(
+            set(self.concurrency_levels)
+        ):
+            raise ValueError("concurrency_levels must be unique, positive, and ascending")
         return self
+
+    @field_validator("sampling_config")
+    @classmethod
+    def sampling_configuration_is_safe(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        secret_names = {
+            "access_token",
+            "api_key",
+            "api_token",
+            "auth_token",
+            "authorization",
+            "bearer",
+            "credential",
+            "credentials",
+            "password",
+            "secret",
+            "token",
+        }
+        normalized_secrets = {re.sub(r"[^a-z0-9]", "", name) for name in secret_names}
+
+        def contains_secret_name(item: JsonValue) -> bool:
+            if isinstance(item, dict):
+                for key, nested in item.items():
+                    normalized_key = re.sub(r"[^a-z0-9]", "", key.casefold())
+                    if normalized_key in normalized_secrets or contains_secret_name(nested):
+                        return True
+            if isinstance(item, list):
+                return any(contains_secret_name(nested) for nested in item)
+            return False
+
+        if contains_secret_name(value):
+            raise ValueError("sampling settings cannot contain credential fields")
+
+        temperature = value.get("temperature")
+        if temperature is not None and (
+            isinstance(temperature, bool)
+            or not isinstance(temperature, (int, float))
+            or not math.isfinite(temperature)
+            or temperature < 0
+        ):
+            raise ValueError("temperature must be a finite non-negative number")
+        top_p = value.get("top_p")
+        if top_p is not None and (
+            isinstance(top_p, bool)
+            or not isinstance(top_p, (int, float))
+            or not math.isfinite(top_p)
+            or not 0 <= top_p <= 1
+        ):
+            raise ValueError("top_p must be a number between zero and one")
+        for integer_key in ("top_k", "seed"):
+            integer_value = value.get(integer_key)
+            minimum = 1 if integer_key == "top_k" else 0
+            if integer_value is not None and (
+                isinstance(integer_value, bool)
+                or not isinstance(integer_value, int)
+                or integer_value < minimum
+            ):
+                raise ValueError(f"{integer_key} must be an integer of at least {minimum}")
+        for stop_key in ("stop", "stop_sequences"):
+            stop_value = value.get(stop_key)
+            if stop_value is not None and not (
+                isinstance(stop_value, str)
+                or (
+                    isinstance(stop_value, list)
+                    and all(isinstance(item, str) for item in stop_value)
+                )
+            ):
+                raise ValueError(f"{stop_key} must be text or a list of text values")
+
+        def finite_json(item: JsonValue) -> bool:
+            if isinstance(item, float):
+                return math.isfinite(item)
+            if isinstance(item, dict):
+                return all(finite_json(nested) for nested in item.values())
+            if isinstance(item, list):
+                return all(finite_json(nested) for nested in item)
+            return True
+
+        if not finite_json(value):
+            raise ValueError("sampling settings must contain finite numbers")
+        return value
 
 
 class BenchmarkPlanStatus(StrEnum):
@@ -347,11 +517,19 @@ class BenchmarkPlan(DomainModel):
     model_artifact_id: UUID | None = None
     workload_id: UUID
     warmup_requests: int = Field(default=0, ge=0)
-    measured_requests: int = Field(ge=1)
+    measured_requests: int | None = Field(default=100, ge=1)
+    measurement_duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
     concurrency: int = Field(default=1, ge=1)
     timeout_seconds: float = Field(default=120, gt=0)
     retain_prompt_output: bool = False
+    dataset_snapshot_hash: str | None = None
     configuration_snapshot: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def run_limit_must_be_present(self) -> "BenchmarkPlan":
+        if self.measured_requests is None and self.measurement_duration_seconds is None:
+            raise ValueError("a request limit or measurement duration is required")
+        return self
 
 
 class BenchmarkRunStatus(StrEnum):

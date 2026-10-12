@@ -134,6 +134,25 @@ def _persist_probe_models(
     returned_refs: set[str] = set()
     for model in result.models:
         returned_refs.add(model.model_ref)
+        tokenizer_identity = model.metadata.get("tokenizer_identity")
+        if not isinstance(tokenizer_identity, str) or not tokenizer_identity.strip():
+            tokenizer_identity = None
+        raw_context_limit = model.metadata.get("max_context_tokens")
+        max_context_tokens = (
+            raw_context_limit
+            if isinstance(raw_context_limit, int)
+            and not isinstance(raw_context_limit, bool)
+            and raw_context_limit > 0
+            else None
+        )
+        raw_format = model.metadata.get("format")
+        model_format = raw_format if isinstance(raw_format, str) and raw_format else None
+        raw_size = model.metadata.get("size_bytes")
+        size_bytes = (
+            raw_size
+            if isinstance(raw_size, int) and not isinstance(raw_size, bool) and raw_size >= 0
+            else None
+        )
         existing = existing_by_ref.get(model.model_ref)
         if existing is None:
             repository.create(
@@ -142,17 +161,29 @@ def _persist_probe_models(
                     engine_profile_id=profile.id,
                     model_ref=model.model_ref,
                     revision=model.revision,
+                    format=model_format,
+                    size_bytes=size_bytes,
+                    tokenizer_identity=tokenizer_identity,
+                    max_context_tokens=max_context_tokens,
                     status=ModelArtifactStatus.AVAILABLE,
                 )
             )
         else:
+            updated_metadata: dict[str, object] = {
+                "display_name": model.display_name,
+                "revision": model.revision,
+                "status": ModelArtifactStatus.AVAILABLE,
+            }
+            if model_format is not None:
+                updated_metadata["format"] = model_format
+            if size_bytes is not None:
+                updated_metadata["size_bytes"] = size_bytes
+            if tokenizer_identity is not None:
+                updated_metadata["tokenizer_identity"] = tokenizer_identity
+            if max_context_tokens is not None:
+                updated_metadata["max_context_tokens"] = max_context_tokens
             changed = ModelArtifact.model_validate(
-                existing.model_dump(mode="python")
-                | {
-                    "display_name": model.display_name,
-                    "revision": model.revision,
-                    "status": ModelArtifactStatus.AVAILABLE,
-                }
+                existing.model_dump(mode="python") | updated_metadata
             )
             repository.update(changed)
 

@@ -18,9 +18,11 @@ from localforge.core.models import (
     MetricSource,
     ModelArtifact,
     RequestSample,
+    TrafficMode,
     Workload,
     WorkloadInputMode,
     WorkloadKind,
+    WorkloadPreset,
 )
 
 
@@ -158,6 +160,58 @@ def test_workload_requires_a_dataset_only_for_dataset_mode() -> None:
         concurrency=1,
     )
     assert synthetic.dataset_id is None
+
+
+def test_workload_duration_limits_and_sampling_settings_are_validated() -> None:
+    duration = Workload(
+        name="Duration workload",
+        kind=WorkloadKind.CHAT,
+        input_mode=WorkloadInputMode.SYNTHETIC,
+        request_count=None,
+        duration_seconds=12,
+        traffic_mode=TrafficMode.OPEN_LOOP,
+        arrival_rate_per_second=2,
+        preset=WorkloadPreset.TARGET_REQUEST_RATE,
+        sampling_config={"top_p": 0.9, "temperature": 0.2},
+    )
+    assert duration.request_count is None
+    assert duration.duration_seconds == 12
+    with pytest.raises(ValidationError, match="top_p must be a number"):
+        Workload(
+            name="Invalid sampling",
+            kind=WorkloadKind.CHAT,
+            input_mode=WorkloadInputMode.SYNTHETIC,
+            request_count=1,
+            sampling_config={"top_p": 1.2},
+        )
+    with pytest.raises(ValidationError, match="credential fields"):
+        Workload(
+            name="Secret sampling option",
+            kind=WorkloadKind.CHAT,
+            input_mode=WorkloadInputMode.SYNTHETIC,
+            request_count=1,
+            sampling_config={"nested": {"api_token": "private"}},
+        )
+
+
+def test_benchmark_plan_can_limit_by_count_or_duration() -> None:
+    plan = BenchmarkPlan(
+        name="Time-bound plan",
+        engine_profile_id="0191f8c6-26a3-7c9f-9a23-f0155b84732c",
+        workload_id="0291f8c6-26a3-7c9f-9a23-f0155b84732c",
+        measured_requests=None,
+        measurement_duration_seconds=30,
+    )
+
+    assert plan.measured_requests is None
+    assert plan.measurement_duration_seconds == 30
+    with pytest.raises(ValidationError, match="request limit or measurement duration"):
+        BenchmarkPlan(
+            name="Unbounded plan",
+            engine_profile_id="0191f8c6-26a3-7c9f-9a23-f0155b84732c",
+            workload_id="0291f8c6-26a3-7c9f-9a23-f0155b84732c",
+            measured_requests=None,
+        )
 
 
 def test_metric_contract_preserves_units_sources_timestamps_and_labels() -> None:

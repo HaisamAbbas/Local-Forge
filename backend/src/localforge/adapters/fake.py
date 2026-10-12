@@ -34,6 +34,7 @@ from localforge.core.models import (
     CapabilitySupport,
     CapabilityValue,
     EngineIntegrationMode,
+    JsonValue,
     MetricSource,
 )
 
@@ -98,6 +99,7 @@ class FakeEngineScenario:
     probe_failure: str | None = None
     probe_failure_code: str = "fake_probe_failed"
     model_inventory_failure: str | None = None
+    model_metadata: dict[str, JsonValue] = field(default_factory=dict)
     streaming_probe_failure: str | None = None
     stream_started: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -375,7 +377,7 @@ class FakeEngineAdapter:
                 model_ref="fake://deterministic-model",
                 display_name=display_name,
                 revision="fixture-1",
-                metadata={"fixture": True, "weights_loaded": False},
+                metadata={"fixture": True, "weights_loaded": False} | self.scenario.model_metadata,
             )
         ]
 
