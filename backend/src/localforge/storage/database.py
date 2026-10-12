@@ -1,0 +1,176 @@
+"""SQLite connections and forward-only schema migrations."""
+
+import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from pathlib import Path
+
+Migration = Callable[[sqlite3.Connection], None]
+
+
+class UnsupportedSchemaVersion(RuntimeError):
+    """Raised when a database was created by a newer LOCALFORGE version."""
+
+
+def _migration_1(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE app_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _migration_2(connection: sqlite3.Connection) -> None:
+    """Add typed domain records and append-only raw sample tables."""
+
+    connection.execute(
+        """
+        CREATE TABLE domain_records (
+            entity_type TEXT NOT NULL CHECK (entity_type IN (
+                'MachineProfile', 'EngineProfile', 'CapabilitySnapshot', 'ModelArtifact',
+                'Dataset', 'Workload', 'BenchmarkPlan', 'BenchmarkRun',
+                'ExperimentGroup', 'ReportMetadata'
+            )),
+            id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+            PRIMARY KEY (entity_type, id)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX domain_records_created_at_idx ON domain_records(entity_type, created_at, id)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE request_samples (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            sequence_number INTEGER NOT NULL CHECK (sequence_number >= 0),
+            schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            content_retained INTEGER NOT NULL CHECK (content_retained IN (0, 1)),
+            payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+            UNIQUE (run_id, sequence_number)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX request_samples_run_id_idx ON request_samples(run_id, sequence_number)"
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER request_samples_require_run
+        BEFORE INSERT ON request_samples
+        WHEN NOT EXISTS (
+            SELECT 1 FROM domain_records
+            WHERE entity_type = 'BenchmarkRun' AND id = NEW.run_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'request sample run does not exist');
+        END
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE metric_samples (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            metric_name TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX metric_samples_run_id_idx ON metric_samples(run_id, observed_at, id)"
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER metric_samples_require_run
+        BEFORE INSERT ON metric_samples
+        WHEN NOT EXISTS (
+            SELECT 1 FROM domain_records
+            WHERE entity_type = 'BenchmarkRun' AND id = NEW.run_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'metric sample run does not exist');
+        END
+        """
+    )
+
+
+MIGRATIONS: dict[int, Migration] = {1: _migration_1, 2: _migration_2}
+CURRENT_SCHEMA_VERSION = max(MIGRATIONS, default=0)
+
+
+def open_database(database_path: Path) -> sqlite3.Connection:
+    """Open a local SQLite database with bounded lock waits and safe defaults."""
+
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    # Each connection is request-scoped; async routes may resume it on the event-loop thread
+    # after FastAPI created it in a synchronous dependency worker thread.
+    connection = sqlite3.connect(
+        database_path,
+        timeout=5.0,
+        isolation_level=None,
+        check_same_thread=False,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA journal_mode = WAL")
+    return connection
+
+
+def initialize_database(database_path: Path) -> int:
+    """Apply pending migrations atomically and return the resulting schema version."""
+
+    connection = open_database(database_path)
+    try:
+        current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if current_version > CURRENT_SCHEMA_VERSION:
+            raise UnsupportedSchemaVersion(
+                f"Database schema {current_version} is newer than supported schema "
+                f"{CURRENT_SCHEMA_VERSION}. Upgrade LOCALFORGE before opening this data."
+            )
+
+        for version in range(current_version + 1, CURRENT_SCHEMA_VERSION + 1):
+            migration = MIGRATIONS.get(version)
+            if migration is None:
+                raise RuntimeError(f"Missing migration for schema version {version}.")
+
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                migration(connection)
+                connection.execute(f"PRAGMA user_version = {version}")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+        return CURRENT_SCHEMA_VERSION
+    finally:
+        connection.close()
+
+
+@contextmanager
+def transaction(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Run a group of repository operations atomically on an open connection."""
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise

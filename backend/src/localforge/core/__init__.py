@@ -1,0 +1,1 @@
+"""Typed LOCALFORGE domain contracts."""
