@@ -134,6 +134,35 @@ def test_run_events_replay_in_order_and_reject_bodies(connection) -> None:
         append_run_event(connection, run.id, "output_chunk", {"text": "private"})
 
 
+def test_request_sample_repository_can_refresh_only_incomplete_samples(connection) -> None:
+    run = _new_queued_run(connection)
+    repository = RequestSampleRepository(connection)
+    started = datetime.now(UTC)
+    repository.create(
+        RequestSample(
+            run_id=run.id,
+            sequence_number=0,
+            outcome=RequestOutcome.IN_PROGRESS,
+            started_at=started,
+        )
+    )
+    repository.create(
+        RequestSample(
+            run_id=run.id,
+            sequence_number=1,
+            outcome=RequestOutcome.SUCCEEDED,
+            started_at=started,
+            completed_at=started + timedelta(milliseconds=10),
+            latency_ms=10,
+        )
+    )
+
+    assert [sample.sequence_number for sample in repository.list_for_run(run.id)] == [0, 1]
+    assert [
+        sample.sequence_number for sample in repository.list_for_run(run.id, incomplete_only=True)
+    ] == [0]
+
+
 def test_worker_interruption_recovers_partial_output_without_inventing_duration(connection) -> None:
     run = _new_queued_run(connection)
     request_id = uuid4()
@@ -789,6 +818,61 @@ def _authorized_client(tmp_path):
     app = create_app(AppSettings(data_directory=tmp_path))
     client = TestClient(app, base_url="http://127.0.0.1")
     return client, app, _authorize
+
+
+def test_run_start_persists_safe_engine_and_machine_profile_snapshots(tmp_path) -> None:
+    client, app, authorize = _authorized_client(tmp_path)
+    with client:
+        authorize(client)
+        engine_id, plan_id = _api_plan(client)
+        connection = open_database(app.state.database_path)
+        try:
+            engine_repository = RecordRepository(connection, EngineProfile)
+            engine = engine_repository.get(UUID(engine_id))
+            assert engine is not None
+            machine = MachineProfile(
+                label="Captured machine",
+                hardware=HardwareSnapshot(os_name="Captured OS", architecture="captured-arch"),
+            )
+            RecordRepository(connection, MachineProfile).create(machine)
+            engine_repository.update(
+                EngineProfile.model_validate(
+                    engine.model_dump(mode="python")
+                    | {
+                        "engine_version": "captured-engine-version",
+                        "machine_profile_id": machine.id,
+                    }
+                )
+            )
+        finally:
+            connection.close()
+
+        started = client.post("/api/v1/runs", json={"plan_id": plan_id})
+        assert started.status_code == 202, started.text
+        run_payload = started.json()["run"]
+        run_id = run_payload["id"]
+        snapshot = run_payload["profile_snapshot"]
+        assert snapshot["engine"]["engine_version"] == "captured-engine-version"
+        assert snapshot["engine"]["adapter_id"] == "localforge.fake"
+        assert snapshot["engine"]["capabilities"]
+        assert "endpoint_url" not in snapshot["engine"]
+        assert "config" not in snapshot["engine"]
+        assert "secret_refs" not in snapshot["engine"]
+        assert snapshot["machine_profile_id"] == str(machine.id)
+        assert snapshot["machine"]["label"] == "Captured machine"
+        assert snapshot["machine"]["hardware"]["os_name"] == "Captured OS"
+
+        deadline = time.monotonic() + 10
+        current = client.get(f"/api/v1/runs/{run_id}").json()
+        while time.monotonic() < deadline and current["status"] not in {
+            "completed",
+            "failed",
+            "interrupted",
+            "cancelled",
+        }:
+            time.sleep(0.05)
+            current = client.get(f"/api/v1/runs/{run_id}").json()
+        assert current["profile_snapshot"] == snapshot
 
 
 def test_run_api_executes_in_child_process_and_replays_sanitized_events(tmp_path) -> None:

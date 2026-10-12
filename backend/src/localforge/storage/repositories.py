@@ -288,12 +288,14 @@ class RequestSampleRepository:
         *,
         after_sequence_number: int = -1,
         limit: int = 500,
+        incomplete_only: bool = False,
     ) -> list[RequestSample]:
         return list(
             self.iter_for_run(
                 run_id,
                 after_sequence_number=after_sequence_number,
                 limit=limit,
+                incomplete_only=incomplete_only,
             )
         )
 
@@ -303,15 +305,19 @@ class RequestSampleRepository:
         *,
         after_sequence_number: int = -1,
         limit: int | None = None,
+        incomplete_only: bool = False,
     ) -> Iterator[RequestSample]:
         """Yield samples in sequence order without materializing the full run in memory."""
 
         if after_sequence_number < -1 or (limit is not None and not 1 <= limit <= 1000):
             raise ValueError("sample cursor or page size is out of range")
         query = """SELECT payload_json FROM request_samples
-                   WHERE run_id = ? AND sequence_number > ?
-                   ORDER BY sequence_number"""
+                   WHERE run_id = ? AND sequence_number > ?"""
         parameters: tuple[object, ...] = (str(run_id), after_sequence_number)
+        if incomplete_only:
+            query += " AND outcome = ?"
+            parameters += (RequestOutcome.IN_PROGRESS.value,)
+        query += " ORDER BY sequence_number"
         if limit is not None:
             query += " LIMIT ?"
             parameters += (limit,)

@@ -29,8 +29,10 @@ from localforge.core.models import (
     BenchmarkPlanStatus,
     BenchmarkRun,
     BenchmarkRunStatus,
+    CapabilitySnapshot,
     EngineIntegrationMode,
     EngineProfile,
+    JsonValue,
     MachineProfile,
 )
 from localforge.core.urls import endpoint_is_remote
@@ -110,6 +112,69 @@ def _resource_keys(
 
     machine_id = plan.machine_profile_id or engine.machine_profile_id
     return _machine_resource_keys(connection, machine_id)
+
+
+def _run_profile_snapshot(
+    connection: sqlite3.Connection,
+    plan: BenchmarkPlan,
+    engine: EngineProfile,
+) -> dict[str, JsonValue]:
+    """Capture only non-secret engine and machine provenance for the run record."""
+
+    machine_id = plan.machine_profile_id or engine.machine_profile_id
+    machine = (
+        RecordRepository(connection, MachineProfile).get(machine_id)
+        if machine_id is not None
+        else None
+    )
+    capability_snapshot = (
+        RecordRepository(connection, CapabilitySnapshot).get(engine.capability_snapshot_id)
+        if engine.capability_snapshot_id is not None
+        else None
+    )
+    capabilities = None
+    if capability_snapshot is not None:
+        capabilities = {
+            name: {"state": value.state.value, "details": None, "source": value.source}
+            for name, value in capability_snapshot.capabilities.items()
+        }
+    return cast(
+        dict[str, JsonValue],
+        {
+            "captured_at": datetime.now(UTC).isoformat(),
+            "machine_profile_id": str(machine_id) if machine_id is not None else None,
+            "machine": (
+                {
+                    "id": str(machine.id),
+                    "label": machine.label,
+                    "status": machine.status.value,
+                    "hardware": (
+                        machine.hardware.model_dump(mode="json")
+                        if machine.hardware is not None
+                        else None
+                    ),
+                }
+                if machine is not None
+                else None
+            ),
+            "engine": {
+                "id": str(engine.id),
+                "label": engine.label,
+                "adapter_id": engine.adapter_id,
+                "engine_display_name": engine.engine_display_name,
+                "adapter_version": engine.adapter_version,
+                "engine_version": engine.engine_version,
+                "integration_mode": engine.integration_mode.value,
+                "capability_snapshot_id": (
+                    str(engine.capability_snapshot_id)
+                    if engine.capability_snapshot_id is not None
+                    else None
+                ),
+                "capabilities": capabilities,
+                "selected_model_ref": engine.selected_model_ref,
+            },
+        },
+    )
 
 
 def _launch_worker(
@@ -192,6 +257,7 @@ def start_run(
     run = BenchmarkRun(
         plan_id=plan.id,
         worker_id=worker_id,
+        profile_snapshot=_run_profile_snapshot(connection, plan, engine),
     )
     try:
         run, conflicting_resources = create_queued_run(
@@ -293,6 +359,7 @@ def get_run_samples(
     connection: DatabaseConnection,
     after: int = Query(default=-1, ge=-1),
     limit: int = Query(default=500, ge=1, le=1000),
+    incomplete_only: bool = Query(default=False),
 ) -> RunSamplesResponse:
     if RecordRepository(connection, BenchmarkRun).get(run_id) is None:
         raise _not_found()
@@ -300,6 +367,7 @@ def get_run_samples(
         run_id,
         after_sequence_number=after,
         limit=limit,
+        incomplete_only=incomplete_only,
     )
     return RunSamplesResponse(
         samples=samples,

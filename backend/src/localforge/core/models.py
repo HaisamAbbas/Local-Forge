@@ -578,6 +578,7 @@ class BenchmarkRun(DomainModel):
     status: BenchmarkRunStatus = BenchmarkRunStatus.QUEUED
     worker_id: str | None = None
     potentially_contended: bool = False
+    profile_snapshot: dict[str, JsonValue] = Field(default_factory=dict)
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_code: str | None = None
