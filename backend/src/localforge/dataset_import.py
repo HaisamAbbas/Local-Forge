@@ -16,6 +16,9 @@ MAX_DATASET_ROWS = 250_000
 MAX_DATASET_ROW_CHARS = 2_000_000
 _FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,119}$")
 
+# The stdlib CSV parser defaults to 128 KiB per field, below our accepted row size.
+csv.field_size_limit(MAX_DATASET_ROW_CHARS)
+
 
 class DatasetImportError(ValueError):
     """A dataset failure with a stable code and optional physical source location."""
