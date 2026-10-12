@@ -626,17 +626,18 @@ def _preflight(
         if workload.duration_seconds is not None:
             duration = workload.duration_seconds * sweep_iterations
             if workload.traffic_mode is TrafficMode.OPEN_LOOP and workload.arrival_rate_per_second:
-                offered = math.ceil(
-                    workload.duration_seconds * workload.arrival_rate_per_second
-                )
+                offered = math.ceil(workload.duration_seconds * workload.arrival_rate_per_second)
                 measured_volume = (
                     min(measured_volume, offered) if measured_volume is not None else offered
                 )
                 if workload.request_count is not None:
-                    duration = min(
-                        workload.duration_seconds,
-                        workload.request_count / workload.arrival_rate_per_second,
-                    ) * sweep_iterations
+                    duration = (
+                        min(
+                            workload.duration_seconds,
+                            workload.request_count / workload.arrival_rate_per_second,
+                        )
+                        * sweep_iterations
+                    )
             if measured_volume is not None:
                 volume = (measured_volume + workload.warmup_count) * sweep_iterations
         elif (
@@ -745,7 +746,10 @@ def _preflight(
     active = {
         BenchmarkRunStatus.QUEUED,
         BenchmarkRunStatus.PREFLIGHT,
+        BenchmarkRunStatus.PREPARING,
+        BenchmarkRunStatus.WARMING,
         BenchmarkRunStatus.RUNNING,
+        BenchmarkRunStatus.CANCELLING,
     }
     for run in run_repo.list(limit=1000):
         if run.status not in active:

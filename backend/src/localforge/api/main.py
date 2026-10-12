@@ -1,12 +1,15 @@
 """FastAPI application factory and initial health route."""
 
+import asyncio
 import os
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from secrets import compare_digest
 from typing import Literal, cast
+from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -18,15 +21,23 @@ from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
 from localforge.adapters.contracts import AdapterManifest
 from localforge.api.profiles import router as profile_router
+from localforge.api.runs import (
+    monitor_run_workers,
+    shutdown_run_workers,
+)
+from localforge.api.runs import (
+    router as run_router,
+)
 from localforge.api.schemas import LocalSessionResponse
 from localforge.api.workloads import router as workload_router
+from localforge.runs import recover_runs_on_startup
 from localforge.security.local_session import (
     SESSION_HEADER_NAME,
     create_local_session_token,
     is_loopback_origin,
     is_loopback_request_host,
 )
-from localforge.storage.database import initialize_database
+from localforge.storage.database import initialize_database, open_database
 from localforge.storage.paths import default_data_directory
 
 MAX_DATASET_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
@@ -103,9 +114,7 @@ class DatasetUploadBodyLimitMiddleware:
             await self._send_error(send)
 
     async def _send_error(self, send: Send) -> None:
-        await send(
-            {"type": "http.response.start", "status": 413, "headers": self.error_headers}
-        )
+        await send({"type": "http.response.start", "status": 413, "headers": self.error_headers})
         await send({"type": "http.response.body", "body": self.error_body})
 
 
@@ -158,6 +167,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         database_path = app_settings.data_directory / "localforge.sqlite3"
         schema_version = initialize_database(database_path)
+        app_instance_id = str(uuid4())
+        recovery_connection = open_database(database_path)
+        try:
+            recover_runs_on_startup(
+                recovery_connection,
+                app_instance_id=app_instance_id,
+            )
+        finally:
+            recovery_connection.close()
         adapter_catalog = app_settings.adapter_catalog_factory()
         application.state.database_schema_version = schema_version
         application.state.database_path = database_path
@@ -165,11 +183,18 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         application.state.max_dataset_upload_bytes = app_settings.max_dataset_upload_bytes
         application.state.adapter_catalog = adapter_catalog
         application.state.local_session_token = app_settings.session_token_factory()
+        application.state.app_instance_id = app_instance_id
+        application.state.run_worker_processes = {}
+        application.state.run_worker_processes_lock = threading.RLock()
         application.state.engine_process_handles = {}
         application.state.engine_profile_lifecycle_locks = {}
+        worker_monitor = asyncio.create_task(monitor_run_workers(application))
         try:
             yield
         finally:
+            worker_monitor.cancel()
+            await asyncio.gather(worker_monitor, return_exceptions=True)
+            await shutdown_run_workers(application)
             await adapter_catalog.close()
 
     application = FastAPI(
@@ -278,6 +303,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     application.include_router(profile_router)
     application.include_router(workload_router)
+    application.include_router(run_router)
     application.add_middleware(
         DatasetUploadBodyLimitMiddleware,
         max_upload_bytes=app_settings.max_dataset_upload_bytes,

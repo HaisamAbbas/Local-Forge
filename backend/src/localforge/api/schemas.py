@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 from localforge.adapters.contracts import ProbeResult
 from localforge.core.models import (
     BenchmarkPlan,
+    BenchmarkRun,
     CapabilityValue,
     Dataset,
     EngineIntegrationMode,
@@ -17,6 +18,8 @@ from localforge.core.models import (
     JsonValue,
     MachineProfile,
     PromptSizingMethod,
+    RequestSample,
+    RunEventRecord,
     SchemaModel,
     TrafficMode,
     WorkloadInputMode,
@@ -214,3 +217,24 @@ class BenchmarkPreflight(SchemaModel):
 class BenchmarkPlanResponse(SchemaModel):
     plan: BenchmarkPlan
     preflight: BenchmarkPreflight
+
+
+class RunStartRequest(SchemaModel):
+    plan_id: UUID
+    override_contention: bool = False
+
+
+class RunStartResponse(SchemaModel):
+    run: BenchmarkRun
+    conflicting_resources: list[str] = Field(default_factory=list)
+
+
+class RunEventPage(SchemaModel):
+    events: list[RunEventRecord] = Field(default_factory=list)
+    next_sequence_number: int | None = None
+    terminal: bool = False
+
+
+class RunSamplesResponse(SchemaModel):
+    samples: list[RequestSample] = Field(default_factory=list)
+    next_sequence_number: int | None = None
