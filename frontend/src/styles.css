@@ -5087,6 +5087,11 @@ table td {
   background-position: center 48%;
 }
 
+.page-heading--settings {
+  background-image: url("/images/localforge-engine-detail.jpg");
+  background-position: center 42%;
+}
+
 .main-content--experiments > .experiments-screen {
   width: min(1540px, 100%);
   margin: 0 auto;
