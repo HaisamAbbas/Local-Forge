@@ -665,7 +665,14 @@ function EngineProfileDialog({
   const isOpenAiCompatible = manifest.adapter_id === "localforge.openai_compatible";
   const isLlamaCpp = manifest.adapter_id === "localforge.llama_cpp";
   const isOllama = manifest.adapter_id === "localforge.ollama";
-  const extensionNamespace = isLlamaCpp ? "llama_cpp" : isOllama ? "ollama" : "openai_compatible";
+  const isLocalAI = manifest.adapter_id === "localforge.localai";
+  const extensionNamespace = isLlamaCpp
+    ? "llama_cpp"
+    : isOllama
+      ? "ollama"
+      : isLocalAI
+        ? "localai"
+        : "openai_compatible";
   const savedExtension = initial?.engine_extensions?.[extensionNamespace] ?? {};
   const savedString = (key: string, fallback: string) => {
     const value = savedExtension[key];
@@ -945,6 +952,15 @@ function EngineProfileDialog({
           timeout_seconds: Number(values.timeout_seconds),
           streaming_mode: values.streaming_mode,
         },
+      };
+    }
+    if (isLocalAI) {
+      const extension: Record<string, unknown> = { ...savedExtension, discover_backend: true };
+      if (values.model_id.trim()) extension.model_id = values.model_id.trim();
+      else delete extension.model_id;
+      input.engine_extensions = {
+        ...(initial?.engine_extensions ?? {}),
+        localai: extension,
       };
     }
     onSubmit(input);
@@ -1308,6 +1324,21 @@ function EngineProfileDialog({
                 )}
               </details>
             </>
+          )}
+          {isLocalAI && (
+            <label>
+              Model ID for backend discovery <span className="optional-label">Optional</span>
+              <input
+                maxLength={500}
+                onChange={(event) => setField("model_id", event.target.value)}
+                placeholder="Use the selected model if left blank"
+                value={values.model_id}
+              />
+              <span className="helper-copy">
+                The saved model configuration may require LocalAI administrator credentials. If it
+                cannot be read, the backend remains unknown.
+              </span>
+            </label>
           )}
           <details className="advanced-fields">
             <summary>Connection details</summary>
@@ -1818,7 +1849,22 @@ export function EnginesScreen() {
                         </span>
                         <div className="catalog-card-copy">
                           <div className="catalog-card-header">
-                            <span className="status-pill status-pill--enabled">Installed</span>
+                            <span
+                              className={`status-pill status-pill--${
+                                manifest.implementation_status === "implemented"
+                                  ? "enabled"
+                                  : "needs_attention"
+                              }`}
+                            >
+                              {manifest.implementation_status === "implemented"
+                                ? "Installed"
+                                : titleCase(manifest.implementation_status)}
+                            </span>
+                            {manifest.maintenance_mode && (
+                              <span className="status-pill status-pill--needs_attention">
+                                Maintenance mode
+                              </span>
+                            )}
                             <span className="catalog-category">{titleCase(manifest.category)}</span>
                           </div>
                           <h3>{manifest.display_name}</h3>
@@ -1826,9 +1872,20 @@ export function EnginesScreen() {
                         </div>
                       </div>
                       <div className="catalog-card-specs">
+                        {manifest.status_details && (
+                          <p className="helper-copy">{manifest.status_details}</p>
+                        )}
                         <div className="catalog-meta">
                           <span>Connection modes</span>
                           <strong>{manifest.integration_modes.map(titleCase).join(" · ")}</strong>
+                        </div>
+                        <div className="catalog-meta">
+                          <span>Fixture version coverage</span>
+                          <strong>
+                            {manifest.version_tested.length > 0
+                              ? manifest.version_tested.join(" · ")
+                              : "No version fixture recorded"}
+                          </strong>
                         </div>
                         <details className="catalog-details catalog-capabilities">
                           <summary>
@@ -1856,17 +1913,27 @@ export function EnginesScreen() {
                           </details>
                         )}
                       </div>
-                      <button
-                        className="button button--secondary catalog-card-action"
-                        onClick={() => {
-                          setDialogError("");
-                          setSelectedAdapterId(manifest.adapter_id);
-                          setEditing("new");
-                        }}
-                        type="button"
-                      >
-                        Add this adapter
-                      </button>
+                      {manifest.implementation_status === "implemented" ? (
+                        <button
+                          className="button button--secondary catalog-card-action"
+                          onClick={() => {
+                            setDialogError("");
+                            setSelectedAdapterId(manifest.adapter_id);
+                            setEditing("new");
+                          }}
+                          type="button"
+                        >
+                          Add this adapter
+                        </button>
+                      ) : (
+                        <button
+                          className="button button--secondary catalog-card-action"
+                          disabled
+                          type="button"
+                        >
+                          Not available yet
+                        </button>
+                      )}
                     </article>
                   ))}
                 </div>

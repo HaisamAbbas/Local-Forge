@@ -47,6 +47,11 @@ const catalogFixture: AdapterManifest = {
   category: "test_fixture",
   integration_modes: ["attached_endpoint", "managed_process"],
   operating_systems: ["windows", "linux", "macos"],
+  implementation_status: "implemented",
+  version_tested: [],
+  maintenance_mode: false,
+  recommended_for_new_managed_install: true,
+  status_details: null,
   declared_capabilities: ["streaming", "health"],
   supported_transports: ["in_process_fake"],
   native_metrics: ["fake.requests_total"],
@@ -63,6 +68,11 @@ const openAiCompatibleFixture: AdapterManifest = {
   category: "openai_compatible",
   integration_modes: ["attached_endpoint"],
   operating_systems: [],
+  implementation_status: "implemented",
+  version_tested: [],
+  maintenance_mode: false,
+  recommended_for_new_managed_install: true,
+  status_details: null,
   declared_capabilities: ["chat_completion", "streaming", "model_inventory"],
   supported_transports: ["http", "https", "server_sent_events"],
   native_metrics: [],
@@ -79,6 +89,11 @@ const llamaCppFixture: AdapterManifest = {
   category: "serving_stack",
   integration_modes: ["attached_endpoint", "managed_process"],
   operating_systems: ["windows", "linux", "macos"],
+  implementation_status: "implemented",
+  version_tested: [],
+  maintenance_mode: false,
+  recommended_for_new_managed_install: true,
+  status_details: null,
   declared_capabilities: ["chat_completion", "streaming", "native_metrics"],
   supported_transports: ["http", "https", "server_sent_events"],
   native_metrics: ["llamacpp:prompt_tokens_total"],
@@ -95,6 +110,11 @@ const ollamaFixture: AdapterManifest = {
   category: "native_api",
   integration_modes: ["attached_endpoint"],
   operating_systems: ["windows", "linux", "macos"],
+  implementation_status: "implemented",
+  version_tested: [],
+  maintenance_mode: false,
+  recommended_for_new_managed_install: true,
+  status_details: null,
   declared_capabilities: ["health", "model_inventory", "streaming"],
   supported_transports: ["http", "ollama_ndjson"],
   native_metrics: ["ollama.eval_duration"],
@@ -254,6 +274,103 @@ describe("overview and system", () => {
 });
 
 describe("engine management", () => {
+  it("shows TGI maintenance status and keeps planned Triton unavailable", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([
+      {
+        ...catalogFixture,
+        adapter_id: "localforge.tgi",
+        display_name: "Hugging Face TGI serving endpoint",
+        maintenance_mode: true,
+        recommended_for_new_managed_install: false,
+        status_details: "Maintenance mode. Connect to an existing deployment.",
+        version_tested: ["3.3.7 (local API fixture)"],
+      },
+      {
+        ...catalogFixture,
+        adapter_id: "localforge.triton_tensorrt_llm",
+        display_name: "NVIDIA Triton + TensorRT-LLM backend",
+        implementation_status: "planned",
+        integration_modes: [],
+        version_tested: [],
+        status_details: "Planned; no callable adapter is registered yet.",
+      },
+    ]);
+
+    render(<EnginesScreen />);
+
+    const tgiCard = (
+      await screen.findByRole("heading", {
+        name: "Hugging Face TGI serving endpoint",
+      })
+    ).closest("article");
+    expect(tgiCard).not.toBeNull();
+    expect(within(tgiCard as HTMLElement).getByText("Maintenance mode")).toBeInTheDocument();
+    expect(
+      within(tgiCard as HTMLElement).getByText("3.3.7 (local API fixture)"),
+    ).toBeInTheDocument();
+
+    const tritonCard = screen
+      .getByRole("heading", {
+        name: "NVIDIA Triton + TensorRT-LLM backend",
+      })
+      .closest("article");
+    expect(tritonCard).not.toBeNull();
+    expect(within(tritonCard as HTMLElement).getByText("Planned")).toBeInTheDocument();
+    expect(
+      within(tritonCard as HTMLElement).getByRole("button", { name: "Not available yet" }),
+    ).toBeDisabled();
+  });
+
+  it("stores LocalAI model selection for backend fingerprint discovery", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([
+      {
+        ...catalogFixture,
+        adapter_id: "localforge.localai",
+        display_name: "LocalAI serving endpoint",
+        integration_modes: ["attached_endpoint"],
+        category: "openai_compatible",
+      },
+    ]);
+
+    render(<EnginesScreen />);
+    const card = (
+      await screen.findByRole("heading", {
+        name: "LocalAI serving endpoint",
+      })
+    ).closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Add this adapter" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: "LocalAI" },
+    });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Connection mode" }), {
+      target: { value: "attached_endpoint" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Endpoint URL/ }), {
+      target: { value: "http://127.0.0.1:8080" },
+    });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: /Model ID for backend discovery/ }),
+      {
+        target: { value: "qwen3-local" },
+      },
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+
+    expect(createEngineProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapter_id: "localforge.localai",
+        integration_mode: "attached_endpoint",
+        endpoint_url: "http://127.0.0.1:8080",
+        engine_extensions: {
+          localai: { model_id: "qwen3-local", discover_backend: true },
+        },
+      }),
+    );
+  });
+
   it("supports add, partial probe, inspect, edit and remove from the UI", async () => {
     let savedProfiles = [] as EngineProfile[];
     vi.mocked(listEngineProfiles).mockImplementation(async () => savedProfiles);

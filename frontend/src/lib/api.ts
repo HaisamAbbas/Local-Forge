@@ -50,6 +50,11 @@ export type AdapterManifest = {
   category: string;
   integration_modes: EngineMode[];
   operating_systems: string[];
+  implementation_status: "implemented" | "planned" | "unsupported";
+  version_tested: string[];
+  maintenance_mode: boolean;
+  recommended_for_new_managed_install: boolean;
+  status_details: string | null;
   declared_capabilities: string[];
   supported_transports: string[];
   native_metrics: string[];
