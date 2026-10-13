@@ -5,6 +5,7 @@ import {
   createBenchmarkPlan,
   createWorkload,
   enableEngineProfile,
+  fetchWorkspaceSettings,
   importDataset,
   listBenchmarkPlans,
   listDatasets,
@@ -25,6 +26,7 @@ import {
   type MachineProfile,
   type Workload,
   type WorkloadInput,
+  type WorkspaceSettingsResponse,
 } from "../lib/api";
 
 type ScreenData = {
@@ -33,6 +35,7 @@ type ScreenData = {
   datasets: Dataset[];
   workloads: Workload[];
   plans: BenchmarkPlan[];
+  settings: WorkspaceSettingsResponse | null;
 };
 
 type WorkloadForm = {
@@ -159,14 +162,43 @@ function formatEstimate(value: number | null, suffix: string) {
 }
 
 async function fetchScreenData(): Promise<ScreenData> {
-  const [engines, machines, datasets, workloads, plans] = await Promise.all([
+  const [engines, machines, datasets, workloads, plans, settings] = await Promise.all([
     listEngineProfiles(),
     listMachineProfiles(),
     listDatasets(),
     listWorkloads(),
     listBenchmarkPlans(),
+    // Settings only adjust defaults; the builder still works with built-in defaults without them.
+    fetchWorkspaceSettings().catch(() => null),
   ]);
-  return { engines, machines, datasets, workloads, plans };
+  return { engines, machines, datasets, workloads, plans, settings };
+}
+
+/** Engines offered for new plans; test fixtures stay hidden unless Settings enables them. */
+function plannableEngines(data: ScreenData | null): EngineProfile[] {
+  if (!data) return [];
+  const settings = data.settings;
+  if (!settings || settings.settings.show_test_fixture_engines) return data.engines;
+  const fixtures = new Set(settings.test_fixture_adapter_ids);
+  return data.engines.filter((engine) => !fixtures.has(engine.adapter_id));
+}
+
+function withSettingsDefaults(
+  current: WorkloadForm,
+  settings: WorkspaceSettingsResponse | null,
+): WorkloadForm {
+  if (!settings) return current;
+  return {
+    ...current,
+    warmupCount:
+      current.warmupCount === INITIAL_FORM.warmupCount
+        ? String(settings.settings.default_warmup_count)
+        : current.warmupCount,
+    retainPromptOutput:
+      current.retainPromptOutput === INITIAL_FORM.retainPromptOutput
+        ? settings.settings.default_retain_prompt_output
+        : current.retainPromptOutput,
+  };
 }
 
 export function WorkloadsScreen() {
@@ -208,10 +240,9 @@ export function WorkloadsScreen() {
       const result = await fetchScreenData();
       setData(result);
       setLoadError(null);
+      const firstEngine = plannableEngines(result)[0];
       setForm((current) =>
-        current.engineId || !result.engines[0]
-          ? current
-          : { ...current, engineId: result.engines[0]!.id },
+        current.engineId || !firstEngine ? current : { ...current, engineId: firstEngine.id },
       );
     } catch (error) {
       setLoadError(errorMessage(error));
@@ -224,11 +255,13 @@ export function WorkloadsScreen() {
       (result) => {
         if (!active) return;
         setData(result);
-        setForm((current) =>
-          current.engineId || !result.engines[0]
-            ? current
-            : { ...current, engineId: result.engines[0]!.id },
-        );
+        const firstEngine = plannableEngines(result)[0];
+        setForm((current) => {
+          const withDefaults = withSettingsDefaults(current, result.settings);
+          return withDefaults.engineId || !firstEngine
+            ? withDefaults
+            : { ...withDefaults, engineId: firstEngine.id };
+        });
       },
       (error: unknown) => {
         if (active) setLoadError(errorMessage(error));
@@ -672,7 +705,7 @@ export function WorkloadsScreen() {
                 {loadError}
               </p>
             )}
-            {data?.engines.length === 0 && (
+            {data && plannableEngines(data).length === 0 && (
               <div className="workload-note workload-no-engine" role="note">
                 Add, probe, and enable an engine before building a benchmark. Go to{" "}
                 <a href="#engines">Engines</a> to configure a local or remote target.
@@ -703,7 +736,7 @@ export function WorkloadsScreen() {
                       value={form.engineId}
                     >
                       <option value="">Choose an engine</option>
-                      {(data?.engines ?? []).map((engine) => (
+                      {plannableEngines(data).map((engine) => (
                         <option key={engine.id} value={engine.id}>
                           {engine.label} · {engine.status}
                         </option>

@@ -207,7 +207,7 @@ def _seed_runs(
                         formula="completion_tokens / elapsed_seconds",
                         labels={
                             "phase": "measurement",
-                            "request_id": f"volatile-request-{index}",
+                            "trace_id": f"volatile-trace-{index}",
                             "api_key": f"metric-private-label-{index}",
                             "api_key_value": f"suffix-api-secret-{index}",
                         },
@@ -275,7 +275,12 @@ def test_comparison_grades_only_one_declared_workload_change_as_controlled(tmp_p
     assert comparison["declared_variable"]["path"] == "workload.sampling_config.temperature"
     shared = {item["metric_name"]: item for item in comparison["shared_metrics"]}
     assert shared["output_tokens_per_second"]["labels"] == {"phase": "measurement"}
-    assert shared["latency_p50"]["runs"][str(run_ids[0])]["value"] is None
+    # A metric with no value in any compared run carries no comparison evidence.
+    assert "latency_p50" not in shared
+    assert any(
+        item["metric_name"] == "latency_p50" and "no value for any compared run" in item["reason"]
+        for item in comparison["excluded_metrics"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -506,6 +511,192 @@ def test_blank_identity_strings_are_unknown_not_matching_evidence(tmp_path) -> N
     tokenizer = next(item for item in comparison["dimensions"] if item["key"] == "tokenizer")
     assert hardware["state"] == "unknown"
     assert tokenizer["state"] == "unknown"
+
+
+def _integrated_gpu(**overrides: object) -> dict[str, object]:
+    return {
+        "name": "Intel(R) Graphics",
+        "vendor": "Intel",
+        "memory_bytes": None,
+        "runtime": None,
+        "driver_version": "32.0.101.8801",
+        "integrated": True,
+        "memory_kind": "shared",
+        "detected_by": "windows-video-controller",
+    } | overrides
+
+
+def _compare_with_hardware(tmp_path, hardware_updates: list[dict[str, object]]) -> dict:
+    app = create_app(AppSettings(data_directory=tmp_path))
+    run_ids, _, _ = _seed_runs(
+        app,
+        tmp_path,
+        [{"sampling_config": {"temperature": 0.2}}, {"sampling_config": {"temperature": 0.8}}],
+    )
+    connection = open_database(app.state.database_path)
+    try:
+        repository = RecordRepository(connection, BenchmarkRun)
+        for run_id, update in zip(run_ids, hardware_updates, strict=True):
+            run = repository.get(run_id)
+            assert run is not None
+            snapshot = json.loads(json.dumps(run.profile_snapshot))
+            snapshot["machine"]["hardware"].update(update)
+            repository.update(run.model_copy(update={"profile_snapshot": snapshot}))
+        return build_run_comparison(
+            connection,
+            run_ids,
+            declared_variable="sampling_config.temperature",
+        )
+    finally:
+        connection.close()
+
+
+def test_same_hardware_matches_despite_provenance_and_unreported_shared_gpu_memory(
+    tmp_path,
+) -> None:
+    comparison = _compare_with_hardware(
+        tmp_path,
+        [
+            {"accelerators": [_integrated_gpu()], "cpu_physical_cores": 6},
+            {"accelerators": [_integrated_gpu(detected_by="another-probe")]},
+        ],
+    )
+
+    hardware = next(item for item in comparison["dimensions"] if item["key"] == "hardware")
+    assert hardware["state"] == "match"
+    # Physical cores were reported by only one run, so they are listed rather than matched.
+    assert hardware["unverified_fields"] == ["cpu_physical_cores"]
+    accelerator = hardware["values"][0]["accelerators"][0]
+    assert accelerator == {
+        "name": "Intel(R) Graphics",
+        "vendor": "Intel",
+        "driver_version": "32.0.101.8801",
+        "integrated": True,
+        "memory_kind": "shared",
+    }
+    assert comparison["grade"] == "A"
+
+
+@pytest.mark.parametrize(
+    ("updates", "state"),
+    [
+        (
+            [
+                {"accelerators": [_integrated_gpu()]},
+                {"accelerators": [_integrated_gpu(name="Intel(R) Arc(TM) Graphics")]},
+            ],
+            "mismatch",
+        ),
+        (
+            [
+                {"accelerators": [_integrated_gpu(memory_bytes=8 * 2**30)]},
+                {"accelerators": [_integrated_gpu(memory_bytes=16 * 2**30)]},
+            ],
+            "mismatch",
+        ),
+        (
+            [{"cpu_physical_cores": 6}, {"cpu_physical_cores": 8}],
+            "mismatch",
+        ),
+        (
+            [{"accelerators": [_integrated_gpu()]}, {"accelerators": None}],
+            "unknown",
+        ),
+        (
+            [
+                {"accelerators": [_integrated_gpu(vendor=None)]},
+                {"accelerators": [_integrated_gpu(vendor=None)]},
+            ],
+            "unknown",
+        ),
+    ],
+)
+def test_different_or_missing_hardware_identity_is_reported_honestly(
+    tmp_path, updates, state
+) -> None:
+    comparison = _compare_with_hardware(tmp_path, updates)
+    hardware = next(item for item in comparison["dimensions"] if item["key"] == "hardware")
+    assert hardware["state"] == state
+
+
+def test_comparison_excludes_per_request_and_telemetry_observations(tmp_path) -> None:
+    app = create_app(AppSettings(data_directory=tmp_path))
+    run_ids, _, _ = _seed_runs(
+        app,
+        tmp_path,
+        [{"sampling_config": {"temperature": 0.2}}, {"sampling_config": {"temperature": 0.8}}],
+    )
+    connection = open_database(app.state.database_path)
+    try:
+        repository = MetricSampleRepository(connection)
+        with transaction(connection):
+            for index, run_id in enumerate(run_ids):
+                for request_index in range(3 + index):
+                    repository.create(
+                        MetricSample(
+                            run_id=run_id,
+                            metric_name="ollama.eval_duration",
+                            value=1_000_000.0 * (request_index + 1),
+                            unit="ns",
+                            source=MetricSource.ENGINE_NATIVE,
+                            aggregation="raw",
+                            sample_count=1,
+                            definition="Ollama server-reported timing.",
+                            formula="reported value in nanoseconds",
+                            labels={"request_id": f"request-{request_index}", "phase": "warmup"},
+                        )
+                    )
+                for sample_index in range(2 + index):
+                    repository.create(
+                        MetricSample(
+                            run_id=run_id,
+                            metric_name="host_cpu_percent",
+                            value=10.0,
+                            unit="%",
+                            source=MetricSource.SYSTEM_OBSERVED,
+                            aggregation="sample",
+                            sample_count=1,
+                            definition="Host CPU utilization.",
+                            formula="psutil.cpu_percent()",
+                            labels={"sample_index": str(sample_index), "scope": "local_host"},
+                        )
+                    )
+                repository.create(
+                    MetricSample(
+                        run_id=run_id,
+                        metric_name="ollama.eval_duration",
+                        value=2_000_000.0 + index,
+                        unit="ns",
+                        source=MetricSource.ENGINE_NATIVE,
+                        aggregation="mean",
+                        sample_count=3 + index,
+                        definition="Engine-reported per-request ollama.eval_duration.",
+                        formula="arithmetic mean of eligible raw request observations",
+                    )
+                )
+        comparison = build_run_comparison(
+            connection,
+            run_ids,
+            declared_variable="sampling_config.temperature",
+        )
+    finally:
+        connection.close()
+
+    shared = [(item["metric_name"], item["aggregation"]) for item in comparison["shared_metrics"]]
+    assert ("ollama.eval_duration", "mean") in shared
+    assert all(aggregation not in {"raw", "sample"} for _, aggregation in shared)
+    assert "host_cpu_percent" not in {name for name, _ in shared}
+    measurement = next(
+        item for item in comparison["dimensions"] if item["key"] == "measurement_sources"
+    )
+    assert measurement["state"] == "match"
+    per_observation = [
+        item["metric_name"]
+        for item in comparison["excluded_metrics"]
+        if item["reason"].startswith("Per-request and telemetry-sample observations")
+    ]
+    assert per_observation == ["host_cpu_percent", "ollama.eval_duration"]
+    assert comparison["grade"] == "A"
 
 
 def test_comparison_rejects_a_run_that_is_still_active(tmp_path) -> None:

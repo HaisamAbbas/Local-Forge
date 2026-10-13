@@ -18,6 +18,7 @@ from localforge.core.models import (
     JsonValue,
     MachineProfile,
     MetricSample,
+    MetricSource,
     ModelArtifact,
     Workload,
 )
@@ -58,6 +59,26 @@ _PRIVATE_FIELD_NAMES = {
     "secretrefs",
     "token",
 }
+_HARDWARE_REQUIRED_FIELDS = (
+    "os_name",
+    "os_version",
+    "architecture",
+    "cpu_model",
+    "cpu_logical_cores",
+    "memory_total_bytes",
+)
+_HARDWARE_OPTIONAL_FIELDS = ("cpu_physical_cores",)
+_ACCELERATOR_REQUIRED_FIELDS = ("name", "vendor")
+_ACCELERATOR_OPTIONAL_FIELDS = (
+    "memory_bytes",
+    "integrated",
+    "memory_kind",
+    "runtime",
+    "driver_version",
+)
+# Per-observation records describe one request or one telemetry tick, not a run, so pairing them
+# across runs is arbitrary. Run-level aggregates of the same data are compared instead.
+_PER_OBSERVATION_AGGREGATIONS = {"raw", "sample"}
 _VOLATILE_METRIC_LABELS = {
     "correlationid",
     "requestid",
@@ -277,34 +298,85 @@ def _identity_value_missing(value: object) -> bool:
     return False
 
 
-def _hardware_identity_incomplete(machine: dict[str, JsonValue] | None) -> bool:
-    hardware = machine.get("hardware") if machine is not None else None
-    if not isinstance(hardware, dict):
-        return True
-    if any(
-        _identity_value_missing(hardware.get(key))
-        for key in (
-            "os_name",
-            "os_version",
-            "architecture",
-            "cpu_model",
-            "cpu_logical_cores",
-            "memory_total_bytes",
-            "accelerators",
-        )
-    ):
-        return True
-    accelerators = hardware.get("accelerators")
-    if not isinstance(accelerators, list):
-        return True
-    return any(
-        not isinstance(accelerator, dict)
-        or any(
-            _identity_value_missing(accelerator.get(key))
-            for key in ("name", "vendor", "memory_bytes", "runtime", "driver_version")
-        )
-        for accelerator in accelerators
-    )
+def _identity_value(value: object) -> JsonValue:
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (bool, int, float)):
+        return value
+    return None
+
+
+def _hardware_identities(
+    machines: list[dict[str, JsonValue] | None],
+) -> tuple[list[JsonValue], list[bool], list[str]]:
+    """Project machine snapshots onto stable hardware identity fields.
+
+    Required fields must be known for every run, or the dimension is unknown. Optional fields
+    (for example discrete-GPU memory, which shared-memory integrated GPUs do not report) are
+    compared only when every selected run reports them; partially reported fields are listed
+    as unverified instead of silently matching. Detection provenance (``detected_by``) and
+    observation timestamps are never part of the identity.
+    """
+
+    identities: list[dict[str, JsonValue] | None] = []
+    incomplete: list[bool] = []
+    for machine in machines:
+        hardware = machine.get("hardware") if machine is not None else None
+        if not isinstance(hardware, dict):
+            identities.append(None)
+            incomplete.append(True)
+            continue
+        identity: dict[str, JsonValue] = {
+            key: _identity_value(hardware.get(key))
+            for key in (*_HARDWARE_REQUIRED_FIELDS, *_HARDWARE_OPTIONAL_FIELDS)
+        }
+        missing = any(identity[key] is None for key in _HARDWARE_REQUIRED_FIELDS)
+        raw_accelerators = hardware.get("accelerators")
+        accelerators: list[JsonValue] | None = None
+        if isinstance(raw_accelerators, list):
+            accelerators = []
+            for raw in raw_accelerators:
+                if not isinstance(raw, dict):
+                    missing = True
+                    continue
+                accelerator = {
+                    key: _identity_value(raw.get(key))
+                    for key in (*_ACCELERATOR_REQUIRED_FIELDS, *_ACCELERATOR_OPTIONAL_FIELDS)
+                }
+                missing = missing or any(
+                    accelerator[key] is None for key in _ACCELERATOR_REQUIRED_FIELDS
+                )
+                accelerators.append(cast(JsonValue, accelerator))
+        else:
+            missing = True
+        identity["accelerators"] = accelerators
+        identities.append(identity)
+        incomplete.append(missing)
+
+    known = [identity for identity in identities if identity is not None]
+    unverified: list[str] = []
+    for key in _HARDWARE_OPTIONAL_FIELDS:
+        if not known or any(identity[key] is None for identity in known):
+            if any(identity[key] is not None for identity in known):
+                unverified.append(key)
+            for identity in known:
+                identity.pop(key, None)
+    accelerator_rows = [
+        cast(dict[str, JsonValue], accelerator)
+        for identity in known
+        if isinstance(identity.get("accelerators"), list)
+        for accelerator in cast(list[JsonValue], identity["accelerators"])
+    ]
+    for key in _ACCELERATOR_OPTIONAL_FIELDS:
+        if not accelerator_rows or any(row[key] is None for row in accelerator_rows):
+            if any(row[key] is not None for row in accelerator_rows):
+                unverified.append(f"accelerators.{key}")
+            for row in accelerator_rows:
+                row.pop(key, None)
+    for identity in known:
+        if isinstance(identity.get("accelerators"), list):
+            cast(list[JsonValue], identity["accelerators"]).sort(key=_json_key)
+    return cast(list[JsonValue], identities), incomplete, unverified
 
 
 def _model_identity(model: dict[str, JsonValue] | None) -> object:
@@ -322,6 +394,18 @@ def _model_identity(model: dict[str, JsonValue] | None) -> object:
 
 def _tokenizer_identity(model: dict[str, JsonValue] | None) -> object:
     return model.get("tokenizer_identity") if model is not None else None
+
+
+def _is_run_level_metric(metric: MetricSample) -> bool:
+    """Return whether a metric summarizes a run rather than one request or telemetry tick."""
+
+    return (
+        metric.source is not MetricSource.SYSTEM_OBSERVED
+        and metric.aggregation not in _PER_OBSERVATION_AGGREGATIONS
+        and not any(
+            re.sub(r"[^a-z0-9]", "", key.casefold()) == "requestid" for key in metric.labels
+        )
+    )
 
 
 def _metric_signature(metric: MetricSample) -> tuple[object, ...]:
@@ -351,9 +435,13 @@ def _comparison_metrics(
     run_ids: list[UUID], metric_rows: dict[UUID, list[MetricSample]]
 ) -> tuple[list[dict[str, JsonValue]], list[dict[str, JsonValue]], list[str]]:
     by_run: dict[UUID, dict[tuple[object, ...], list[MetricSample]]] = {}
+    per_observation_names: set[str] = set()
     for run_id in run_ids:
         indexed: dict[tuple[object, ...], list[MetricSample]] = defaultdict(list)
         for metric in metric_rows[run_id]:
+            if not _is_run_level_metric(metric):
+                per_observation_names.add(metric.metric_name)
+                continue
             indexed[_metric_signature(metric)].append(metric)
         by_run[run_id] = indexed
 
@@ -363,6 +451,7 @@ def _comparison_metrics(
         common_signatures = current if common_signatures is None else common_signatures & current
     common_signatures = common_signatures or set()
     shared: list[dict[str, JsonValue]] = []
+    unavailable: list[dict[str, JsonValue]] = []
     for signature in sorted(common_signatures, key=_json_key):
         (
             name,
@@ -386,6 +475,17 @@ def _comparison_metrics(
                 "sample_count": sum(row.sample_count for row in rows if row.value is not None),
                 "record_count": len(rows),
             }
+        if all(value is None for value in values.values()):
+            unavailable.append(
+                {
+                    "metric_name": cast(str, name),
+                    "reason": (
+                        "Metric has no value for any compared run: "
+                        f"{_json_key([aggregation, _stable_metric_labels(rows[0].labels)])}"
+                    ),
+                }
+            )
+            continue
         baseline = values[run_ids[0]]
         shared.append(
             {
@@ -411,6 +511,17 @@ def _comparison_metrics(
         }
         for signature in sorted(all_signatures - common_signatures, key=_json_key)
     ]
+    excluded.extend(unavailable)
+    excluded.extend(
+        {
+            "metric_name": name,
+            "reason": (
+                "Per-request and telemetry-sample observations are not paired across runs; "
+                "only run-level summaries are compared."
+            ),
+        }
+        for name in sorted(per_observation_names)
+    )
     sources = sorted({cast(str, signature[2]) for signature in common_signatures})
     return shared, excluded, sources
 
@@ -501,22 +612,19 @@ def build_run_comparison(
                 major_mismatch.append(key)
         return equal
 
-    hardware_values: list[JsonValue] = []
-    for run_id in compare_ids:
-        machine_snapshot = machines[run_id]
-        hardware_values.append(
-            machine_snapshot.get("hardware") if machine_snapshot is not None else None
-        )
+    hardware_values, hardware_incomplete, hardware_unverified = _hardware_identities(
+        [machines[run_id] for run_id in compare_ids]
+    )
     dimension(
         "hardware",
         "Hardware",
         hardware_values,
         unknown_if_missing=True,
         major=True,
-        incomplete_values=[
-            _hardware_identity_incomplete(machines[run_id]) for run_id in compare_ids
-        ],
+        incomplete_values=hardware_incomplete,
     )
+    if hardware_unverified:
+        dimensions[-1]["unverified_fields"] = cast(JsonValue, hardware_unverified)
 
     model_values = [cast(JsonValue, _model_identity(models[run_id])) for run_id in compare_ids]
     dimension(
@@ -655,6 +763,8 @@ def build_run_comparison(
     for run_id in compare_ids:
         definitions_by_key: dict[str, dict[str, JsonValue]] = {}
         for metric in metrics[run_id]:
+            if not _is_run_level_metric(metric):
+                continue
             definition: dict[str, JsonValue] = {
                 "metric_name": metric.metric_name,
                 "unit": metric.unit,

@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from localforge.adapters.catalog import AdapterCatalog
 from localforge.api.dependencies import DatabaseConnection
 from localforge.api.schemas import (
     RunEventPage,
@@ -53,6 +54,11 @@ from localforge.storage.repositories import (
     MetricSampleRepository,
     RecordRepository,
     RequestSampleRepository,
+)
+from localforge.workspace_settings import (
+    TEST_FIXTURE_BLOCKER_CODE,
+    TEST_FIXTURE_BLOCKER_MESSAGE,
+    is_test_fixture_engine_blocked,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -278,6 +284,13 @@ def start_run(
                 "code": "engine_profile_missing",
                 "message": "The plan's engine profile no longer exists.",
             },
+        )
+    if is_test_fixture_engine_blocked(
+        connection, cast(AdapterCatalog, request.app.state.adapter_catalog), engine.adapter_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": TEST_FIXTURE_BLOCKER_CODE, "message": TEST_FIXTURE_BLOCKER_MESSAGE},
         )
 
     resources = _resource_keys(connection, plan, engine)

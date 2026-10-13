@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,8 +13,10 @@ import {
   startEngineProfile,
   stopEngineProfile,
   updateEngineProfile,
+  type AcceleratorDetails,
   type AdapterManifest,
   type EngineProfile,
+  type HardwareDetails,
   type ProbeResponse,
 } from "../lib/api";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./WorkspaceScreens";
@@ -901,5 +903,82 @@ describe("engine management", () => {
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Probe" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled();
+  });
+});
+
+describe("add engine default", () => {
+  it("opens the first implemented, non-fixture adapter instead of a planned entry", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([
+      {
+        ...catalogFixture,
+        adapter_id: "localforge.exllamav3",
+        display_name: "ExLlamaV3 library pipeline",
+        category: "library_pipeline",
+        implementation_status: "planned",
+        integration_modes: [],
+      },
+      catalogFixture,
+      llamaCppFixture,
+    ]);
+
+    render(<EnginesScreen />);
+    expect(await screen.findByText("No engine profiles are configured.")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "llama.cpp / llama-server" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add engine" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    expect(within(dialog).getByText(/^llama\.cpp \/ llama-server:/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add your first engine" }));
+    expect(
+      within(screen.getByRole("dialog", { name: "Add an engine" })).getByText(
+        /^llama\.cpp \/ llama-server:/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("disables adding when only planned connectors are listed", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([
+      { ...catalogFixture, implementation_status: "planned", integration_modes: [] },
+    ]);
+
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add engine" })).toBeDisabled());
+  });
+});
+
+describe("system accelerator details", () => {
+  it("labels integrated GPUs with shared memory and shows physical cores", async () => {
+    const { fetchSystemProfile } = await import("../lib/api");
+    const hardware: HardwareDetails & { accelerators: AcceleratorDetails[] } = {
+      ...machineFixture.hardware,
+      cpu_physical_cores: 12,
+      accelerators: [
+        {
+          name: "Intel(R) Graphics",
+          vendor: "Intel",
+          memory_bytes: null,
+          runtime: null,
+          driver_version: "32.0.101.8801",
+          integrated: true,
+          memory_kind: "shared",
+          detected_by: "windows-video-controller",
+        },
+      ],
+    };
+    vi.mocked(fetchSystemProfile).mockResolvedValue({ ...machineFixture, hardware });
+
+    render(<SystemScreen />);
+
+    expect(await screen.findByText("Intel(R) Graphics")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Intel · Integrated · 32.0.101.8801 · Shared system memory · via windows-video-controller",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Physical cores")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
   });
 });

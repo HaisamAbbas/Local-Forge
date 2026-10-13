@@ -25,6 +25,7 @@ import {
   startEngineProfile,
   stopEngineProfile,
   updateEngineProfile,
+  type AcceleratorDetails,
   type AdapterManifest,
   type AdapterModel,
   type CapabilityValue,
@@ -32,6 +33,7 @@ import {
   type EngineMode,
   type EngineProfile,
   type EngineProfileInput,
+  type HardwareDetails,
   type MachineProfile,
   type ProbeResult,
 } from "../lib/api";
@@ -344,6 +346,7 @@ function MachineFacts({ machine }: { machine: MachineProfile }) {
     ["Architecture", hardware?.architecture],
     ["Processor", hardware?.cpu_model],
     ["Logical cores", hardware?.cpu_logical_cores],
+    ["Physical cores", (hardware as HardwareDetails | null | undefined)?.cpu_physical_cores],
     [
       "Memory",
       hardware?.memory_total_bytes == null ? null : formatBytes(hardware.memory_total_bytes),
@@ -377,17 +380,25 @@ function MachineFacts({ machine }: { machine: MachineProfile }) {
           <strong>No accelerators reported</strong>
         ) : (
           <ul className="accelerator-list">
-            {hardware.accelerators.map((accelerator, index) => (
+            {hardware.accelerators.map((accelerator: AcceleratorDetails, index) => (
               <li key={`${accelerator.name}-${index}`}>
                 <strong>{accelerator.name}</strong>
                 <span>
                   {[
                     accelerator.vendor,
+                    accelerator.integrated === true
+                      ? "Integrated"
+                      : accelerator.integrated === false
+                        ? "Discrete"
+                        : null,
                     accelerator.runtime,
                     accelerator.driver_version,
                     accelerator.memory_bytes === null
-                      ? null
-                      : formatBytes(accelerator.memory_bytes),
+                      ? accelerator.memory_kind === "shared"
+                        ? "Shared system memory"
+                        : null
+                      : `${formatBytes(accelerator.memory_bytes)}${accelerator.memory_kind === "dedicated" ? " dedicated" : ""}`,
+                    accelerator.detected_by ? `via ${accelerator.detected_by}` : null,
                   ]
                     .filter(Boolean)
                     .join(" · ") || "Details unknown"}
@@ -415,6 +426,7 @@ function labelToField(label: string): string {
         Architecture: "architecture",
         Processor: "cpu_model",
         "Logical cores": "cpu_logical_cores",
+        "Physical cores": "cpu_physical_cores",
         Memory: "memory_total_bytes",
       } as Record<string, string>
     )[label] ?? ""
@@ -2103,6 +2115,12 @@ export function EnginesScreen() {
   };
 
   const availableManifests = catalog.resource.status === "ready" ? catalog.resource.value : [];
+  // The catalog is sorted by id, so its first entry can be a planned (unconfigurable) connector.
+  const defaultNewManifest =
+    availableManifests.find(
+      (manifest) =>
+        manifest.implementation_status === "implemented" && manifest.category !== "test_fixture",
+    ) ?? availableManifests.find((manifest) => manifest.implementation_status === "implemented");
   return (
     <div className="screen-stack">
       <div className="engine-workbench">
@@ -2114,10 +2132,10 @@ export function EnginesScreen() {
             </div>
             <button
               className="button button--primary"
-              disabled={!availableManifests.length}
+              disabled={!defaultNewManifest}
               onClick={() => {
                 setDialogError("");
-                setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
+                setSelectedAdapterId(defaultNewManifest?.adapter_id ?? "");
                 setEditing("new");
               }}
               type="button"
@@ -2314,10 +2332,10 @@ export function EnginesScreen() {
                     <p>Connect a local runtime or a user-selected endpoint to begin testing.</p>
                     <button
                       className="button button--primary"
-                      disabled={!availableManifests.length}
+                      disabled={!defaultNewManifest}
                       onClick={() => {
                         setDialogError("");
-                        setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
+                        setSelectedAdapterId(defaultNewManifest?.adapter_id ?? "");
                         setEditing("new");
                       }}
                       type="button"

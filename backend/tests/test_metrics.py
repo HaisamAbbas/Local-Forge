@@ -7,6 +7,7 @@ import pytest
 
 from localforge.adapters.contracts import AdapterMetric
 from localforge.core.models import (
+    MetricSample,
     MetricSource,
     RequestOutcome,
     RequestSample,
@@ -580,3 +581,101 @@ def test_native_counter_delta_tracks_labeled_prometheus_series_independently() -
         ("0", 3),
         ("1", 6),
     }
+
+
+def _native_request_metric(
+    request: RequestSample, name: str, value: float, unit: str, *, phase: str = "measurement"
+) -> MetricSample:
+    return MetricSample(
+        run_id=RUN_ID,
+        metric_name=name,
+        value=value,
+        unit=unit,
+        source=MetricSource.ENGINE_NATIVE,
+        aggregation="raw",
+        sample_count=1,
+        definition="Ollama server-reported value for an individual chat request.",
+        formula="reported value",
+        method_version="ollama.api.chat.v1",
+        labels={"request_id": str(request.request_id), "phase": phase},
+    )
+
+
+def test_engine_native_request_observations_gain_run_level_aggregates_and_rates() -> None:
+    first = _request(0, input_tokens=10, output_tokens=4)
+    second = _request(1, input_tokens=30, output_tokens=6)
+    warmup = _request(2, phase="warmup", input_tokens=99, output_tokens=99)
+    native = [
+        _native_request_metric(first, "ollama.eval_duration", 1_000_000_000, "ns"),
+        _native_request_metric(second, "ollama.eval_duration", 3_000_000_000, "ns"),
+        _native_request_metric(first, "ollama.eval_count", 4, "tokens"),
+        _native_request_metric(second, "ollama.eval_count", 6, "tokens"),
+        _native_request_metric(first, "ollama.prompt_eval_duration", 500_000_000, "ns"),
+        _native_request_metric(second, "ollama.prompt_eval_duration", 1_500_000_000, "ns"),
+        _native_request_metric(first, "ollama.prompt_eval_count", 10, "tokens"),
+        _native_request_metric(second, "ollama.prompt_eval_count", 30, "tokens"),
+        _native_request_metric(warmup, "ollama.eval_duration", 9e12, "ns", phase="warmup"),
+    ]
+
+    metrics = aggregate_run_metrics(RUN_ID, [first, second, warmup], native)
+
+    eval_mean = _metric(metrics, "ollama.eval_duration", "mean")
+    assert eval_mean.source is MetricSource.ENGINE_NATIVE
+    assert eval_mean.unit == "ns"
+    assert eval_mean.value == 2_000_000_000
+    assert eval_mean.sample_count == 2
+    assert _metric(metrics, "ollama.eval_duration", "p50").value == 2_000_000_000
+    assert _metric(metrics, "ollama.eval_count", "mean").unit == "tokens"
+    decode = _metric(metrics, "ollama.eval_rate_tokens_per_second")
+    assert decode.source is MetricSource.DERIVED
+    assert decode.aggregation == "run_rate"
+    assert decode.value == pytest.approx(10 / 4)
+    assert decode.sample_count == 2
+    assert decode.quality_flags == []
+    assert "sum(ollama.eval_count)" in decode.formula
+    prefill = _metric(metrics, "ollama.prompt_eval_rate_tokens_per_second")
+    assert prefill.value == pytest.approx(40 / 2)
+    # Engine-timed prefill never fills the cross-engine prompt-processing metric.
+    assert _metric(metrics, "prompt_processing_throughput_tokens_per_second").value is None
+    assert not any(row.labels.get("request_id") for row in metrics)
+
+
+def test_engine_rates_fall_back_to_engine_exact_usage_and_flag_incomplete_counts() -> None:
+    exact = _request(
+        0,
+        input_tokens=8,
+        output_tokens=5,
+        input_source=TokenCountSource.ENGINE_EXACT,
+        output_source=TokenCountSource.ENGINE_EXACT,
+    )
+    estimated = _request(
+        1,
+        input_tokens=8,
+        output_tokens=5,
+        input_source=TokenCountSource.ESTIMATED,
+        output_source=TokenCountSource.ESTIMATED,
+    )
+    native = [
+        _native_request_metric(exact, "ollama.eval_duration", 500_000_000, "ns"),
+        _native_request_metric(exact, "ollama.prompt_eval_duration", 0, "ns"),
+    ]
+
+    metrics = aggregate_run_metrics(RUN_ID, [exact, estimated], native)
+    decode = _metric(metrics, "ollama.eval_rate_tokens_per_second")
+    assert decode.value == pytest.approx(10.0)
+    assert "token_counts_from_engine_usage_record" in decode.quality_flags
+    prefill = _metric(metrics, "ollama.prompt_eval_rate_tokens_per_second")
+    assert prefill.value is None
+    assert "unavailable_zero_engine_duration" in prefill.quality_flags
+
+    native.append(_native_request_metric(estimated, "ollama.eval_duration", 500_000_000, "ns"))
+    metrics = aggregate_run_metrics(RUN_ID, [exact, estimated], native)
+    incomplete = _metric(metrics, "ollama.eval_rate_tokens_per_second")
+    assert incomplete.value is None
+    assert "incomplete_token_count_coverage" in incomplete.quality_flags
+
+
+def test_runs_without_engine_request_observations_gain_no_native_placeholders() -> None:
+    metrics = aggregate_run_metrics(RUN_ID, [_request(0)])
+    assert not any(row.metric_name.startswith("ollama.") for row in metrics)
+    assert not any(row.source is MetricSource.ENGINE_NATIVE for row in metrics)

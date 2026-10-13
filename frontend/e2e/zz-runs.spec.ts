@@ -76,11 +76,15 @@ test("follows, reconnects to, and cancels fake-engine runs from history", async 
   expect(completedRunReads).toBe(settledRunReads);
   await expect(detail.getByRole("heading", { name: "Request latency observations" })).toBeVisible();
   await expect(
-    detail.locator(".run-fact").filter({ hasText: "Latency samples" }).locator("strong"),
-  ).toHaveText("3");
+    detail.locator(".key-result").filter({ hasText: "Succeeded" }).locator("strong"),
+  ).toHaveText("3 / 3");
   await expect(
     detail.getByRole("heading", { name: "Engine and capabilities at run start" }),
   ).toBeVisible();
+  const latencyTableToggle = detail.locator(
+    'section[aria-labelledby="run-latency-chart-title"] summary',
+  );
+  await latencyTableToggle.click();
   await expect(
     detail.getByRole("table", {
       name: "Accessible table of the latency points shown in the chart",
@@ -90,6 +94,7 @@ test("follows, reconnects to, and cancels fake-engine runs from history", async 
   await page.reload();
   await expect(detail.getByRole("heading", { name: completedPlanName })).toBeVisible();
   await expect(detail.locator(".status-pill")).toHaveText("completed");
+  await latencyTableToggle.click();
   await expect(
     detail
       .getByRole("table", { name: "Accessible table of the latency points shown in the chart" })

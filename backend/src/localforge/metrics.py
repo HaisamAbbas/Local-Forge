@@ -3,7 +3,7 @@
 import math
 import sqlite3
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from statistics import fmean
@@ -50,10 +50,17 @@ class _RequestMetricSample:
     completion_tokens: int | None
     completion_token_count_source: TokenCountSource
     first_output_offset_ms: float | None
+    # Engine-native per-request observations keyed by (metric name, unit).
+    native_observations: Mapping[tuple[str, str], float]
 
     @classmethod
-    def from_request(cls, sample: RequestSample) -> "_RequestMetricSample":
+    def from_request(
+        cls,
+        sample: RequestSample,
+        native_observations: Mapping[tuple[str, str], float] | None = None,
+    ) -> "_RequestMetricSample":
         return cls(
+            native_observations=native_observations or {},
             concurrency_level=sample.concurrency_level,
             effective_concurrency=sample.effective_concurrency,
             outcome=sample.outcome,
@@ -272,17 +279,47 @@ def _distribution(
     return result
 
 
+def _native_request_observations(
+    metrics: Iterable[MetricSample],
+) -> dict[str, dict[tuple[str, str], float]]:
+    """Index raw engine-native per-request observations by their request ID label."""
+
+    indexed: dict[str, dict[tuple[str, str], float]] = {}
+    for metric in metrics:
+        request_id = metric.labels.get("request_id")
+        if (
+            metric.source is MetricSource.ENGINE_NATIVE
+            and metric.aggregation == "raw"
+            and request_id
+            and metric.value is not None
+            and math.isfinite(metric.value)
+        ):
+            indexed.setdefault(request_id, {})[(metric.metric_name, metric.unit)] = metric.value
+    return indexed
+
+
 def aggregate_run_metrics(
     run_id: UUID,
     raw_samples: Iterable[RequestSample],
+    native_metrics: Iterable[MetricSample] = (),
 ) -> list[MetricSample]:
-    """Aggregate measurement requests separately for each concurrency level."""
+    """Aggregate measurement requests separately for each concurrency level.
 
+    ``native_metrics`` may contain the run's raw engine-native per-request observations
+    (labelled with ``request_id``); they are summarized with the request they belong to.
+    """
+
+    native_by_request = _native_request_observations(native_metrics)
     samples_by_level: dict[int | None, list[_RequestMetricSample]] = {}
     for sample in raw_samples:
         if sample.phase == "measurement":
             samples_by_level.setdefault(sample.concurrency_level, []).append(
-                _RequestMetricSample.from_request(sample)
+                _RequestMetricSample.from_request(
+                    sample,
+                    native_by_request.get(str(sample.request_id))
+                    if sample.request_id is not None
+                    else None,
+                )
             )
     if not samples_by_level:
         return _aggregate_run_metric_records(run_id, ())
@@ -315,6 +352,7 @@ def _aggregate_run_metric_records(
 ) -> list[MetricSample]:
     """Summarize persisted request records for one measurement group."""
 
+    records = list(raw_samples)
     latencies: list[float] = []
     ttfts: list[float] = []
     queue_times: list[float] = []
@@ -339,7 +377,7 @@ def _aggregate_run_metric_records(
 
     exact_sources = {TokenCountSource.ENGINE_EXACT, TokenCountSource.TOKENIZER_EXACT}
     estimated_sources = {TokenCountSource.ENGINE_ESTIMATED, TokenCountSource.ESTIMATED}
-    for sample in raw_samples:
+    for sample in records:
         attempted += 1
         outcomes[sample.outcome] += 1
         if sample.dispatch_offset_ms is None or sample.completed_offset_ms is None:
@@ -683,7 +721,121 @@ def _aggregate_run_metric_records(
             quality_flags=["unavailable_prefill_interval"],
         )
     )
+    metric_rows.extend(_engine_native_request_aggregates(run_id, records))
     return metric_rows
+
+
+# Engine-reported token rates: (metric, token-count metric, duration metric in ns,
+# request-sample usage field used when the count was not stored as a native metric, definition).
+_ENGINE_REPORTED_RATES: tuple[tuple[str, str, str, Literal["prompt", "completion"], str], ...] = (
+    (
+        "ollama.prompt_eval_rate_tokens_per_second",
+        "ollama.prompt_eval_count",
+        "ollama.prompt_eval_duration",
+        "prompt",
+        "Ollama-reported prompt (prefill) tokens per second of Ollama-reported prompt "
+        "evaluation time. Engine-timed; not comparable with client-timed throughput.",
+    ),
+    (
+        "ollama.eval_rate_tokens_per_second",
+        "ollama.eval_count",
+        "ollama.eval_duration",
+        "completion",
+        "Ollama-reported generated (decode) tokens per second of Ollama-reported evaluation "
+        "time. Engine-timed; not comparable with client-timed throughput.",
+    ),
+)
+ENGINE_NATIVE_AGGREGATE_NAMES = frozenset(rate[0] for rate in _ENGINE_REPORTED_RATES)
+
+
+def _engine_native_request_aggregates(
+    run_id: UUID,
+    samples: Sequence[_RequestMetricSample],
+) -> list[MetricSample]:
+    """Summarize per-request engine-native observations for one measurement group.
+
+    Only metrics the engine actually reported are summarized, so engines without per-request
+    native values gain no placeholder rows.
+    """
+
+    values: dict[tuple[str, str], list[float]] = {}
+    for sample in samples:
+        for key, observed in sample.native_observations.items():
+            values.setdefault(key, []).append(observed)
+    rows: list[MetricSample] = []
+    for name, unit in sorted(values):
+        rows.extend(
+            _distribution(
+                run_id,
+                name,
+                values[(name, unit)],
+                unit,
+                source=MetricSource.ENGINE_NATIVE,
+                definition=(
+                    f"Engine-reported per-request {name} summarized over measurement requests "
+                    "that reported it."
+                ),
+            )
+        )
+
+    for name, count_name, duration_name, usage_field, definition in _ENGINE_REPORTED_RATES:
+        if (duration_name, "ns") not in values:
+            continue
+        token_total = 0.0
+        duration_seconds = 0.0
+        paired = 0
+        missing_counts = 0
+        used_request_usage = False
+        for sample in samples:
+            duration = sample.native_observations.get((duration_name, "ns"))
+            if duration is None:
+                continue
+            count = sample.native_observations.get((count_name, "tokens"))
+            if count is None:
+                usage_tokens, usage_source = (
+                    (sample.prompt_tokens, sample.prompt_token_count_source)
+                    if usage_field == "prompt"
+                    else (sample.completion_tokens, sample.completion_token_count_source)
+                )
+                if usage_tokens is not None and usage_source is TokenCountSource.ENGINE_EXACT:
+                    count = float(usage_tokens)
+                    used_request_usage = True
+            if count is None:
+                missing_counts += 1
+                continue
+            token_total += count
+            duration_seconds += duration / 1_000_000_000
+            paired += 1
+        flags: list[str] = []
+        value: float | None = None
+        if missing_counts:
+            flags.append("incomplete_token_count_coverage")
+        elif paired == 0:
+            flags.append("unavailable_no_samples")
+        elif duration_seconds <= 0:
+            flags.append("unavailable_zero_engine_duration")
+        else:
+            value = token_total / duration_seconds
+        if used_request_usage:
+            flags.append("token_counts_from_engine_usage_record")
+        rows.append(
+            _metric(
+                run_id,
+                name,
+                value,
+                "tokens/s",
+                source=MetricSource.DERIVED,
+                aggregation="run_rate",
+                sample_count=paired,
+                definition=definition,
+                formula=(
+                    f"sum({count_name}) / (sum({duration_name} ns) / 1e9) over measurement "
+                    "requests reporting both"
+                ),
+                quality_flags=flags,
+            )
+        )
+    return rows
 
 
 def persist_derived_run_metrics(
@@ -705,11 +857,77 @@ def persist_derived_run_metrics(
     ):
         return []
     samples = RequestSampleRepository(connection).iter_for_run(run_id, limit=None)
-    metrics = aggregate_run_metrics(run_id, samples)
+    metrics = aggregate_run_metrics(run_id, samples, existing)
     with transaction(connection):
         for metric in metrics:
             metric_repository.create(metric)
     return metrics
+
+
+def _is_engine_request_aggregate(metric: MetricSample) -> bool:
+    return (
+        metric.source is MetricSource.ENGINE_NATIVE and metric.aggregation != "raw"
+    ) or metric.metric_name in ENGINE_NATIVE_AGGREGATE_NAMES
+
+
+def _aggregate_key(metric: MetricSample) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    return metric.metric_name, metric.aggregation, tuple(sorted(metric.labels.items()))
+
+
+def backfill_engine_native_run_metrics(
+    connection: sqlite3.Connection,
+    run_id: UUID,
+) -> list[MetricSample]:
+    """Add missing run-level engine-native aggregates to an already finalized run.
+
+    Runs finalized before these aggregates existed keep every original metric untouched. The
+    missing rows are recomputed from the run's stored request samples and raw per-request
+    engine-native observations with the same method as finalization, and only aggregate keys
+    (name, aggregation, labels) that are absent are appended, so repeated calls are no-ops.
+    Runs that were never finalized are left for normal finalization.
+    """
+
+    from localforge.storage.database import transaction
+    from localforge.storage.repositories import MetricSampleRepository, RequestSampleRepository
+
+    metric_repository = MetricSampleRepository(connection)
+    existing = metric_repository.list_for_run(run_id)
+    finalized = any(
+        metric.metric_name == "requests_attempted"
+        and metric.source is MetricSource.DERIVED
+        and metric.aggregation == "run_total"
+        for metric in existing
+    )
+    if not finalized or not _native_request_observations(existing):
+        return []
+    present = {_aggregate_key(metric) for metric in existing}
+    samples = RequestSampleRepository(connection).iter_for_run(run_id, limit=None)
+    missing = [
+        metric
+        for metric in aggregate_run_metrics(run_id, samples, existing)
+        if _is_engine_request_aggregate(metric) and _aggregate_key(metric) not in present
+    ]
+    if missing:
+        with transaction(connection):
+            for metric in missing:
+                metric_repository.create(metric)
+    return missing
+
+
+def backfill_engine_native_metrics_for_finalized_runs(connection: sqlite3.Connection) -> int:
+    """Backfill engine-native run aggregates for every run with per-request native records."""
+
+    rows = connection.execute(
+        "SELECT DISTINCT run_id FROM metric_samples "
+        "WHERE json_extract(payload_json, '$.source') = ? "
+        "AND json_extract(payload_json, '$.aggregation') = 'raw' "
+        "AND json_extract(payload_json, '$.labels.request_id') IS NOT NULL",
+        (MetricSource.ENGINE_NATIVE.value,),
+    ).fetchall()
+    added = 0
+    for row in rows:
+        added += len(backfill_engine_native_run_metrics(connection, UUID(str(row["run_id"]))))
+    return added
 
 
 def evaluate_native_metric_snapshots(

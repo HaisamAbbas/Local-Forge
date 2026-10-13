@@ -589,19 +589,46 @@ async function readSessionToken(): Promise<string> {
   return sessionToken;
 }
 
+async function isStaleSessionResponse(response: Response): Promise<boolean> {
+  if (response.status !== 403) return false;
+  try {
+    const payload = (await response.clone().json()) as { detail?: { code?: unknown } };
+    return payload.detail?.code === "local_session_required";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send a mutating request with the local session header. The API issues a new token each time
+ * it starts, so a rejected token is refreshed once and the request retried.
+ */
+async function fetchWithSession(path: string, init: RequestInit): Promise<Response> {
+  const send = async () => {
+    const headers = new Headers(init.headers);
+    headers.set("X-LOCALFORGE-SESSION", await readSessionToken());
+    return fetch(path, { ...init, headers });
+  };
+  const response = await send();
+  if (!(await isStaleSessionResponse(response))) return response;
+  sessionToken = null;
+  return send();
+}
+
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body !== undefined && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json");
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-    headers.set("X-LOCALFORGE-SESSION", await readSessionToken());
-  }
+  const mutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
   let response: Response;
   try {
-    response = await fetch(path, { ...init, headers });
-  } catch {
+    response = mutating
+      ? await fetchWithSession(path, { ...init, headers })
+      : await fetch(path, { ...init, headers });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(
       "The local API could not be reached. Check that it is running, then retry.",
       0,
@@ -740,11 +767,10 @@ export async function streamPlaygroundPrompt(
   const headers = new Headers({
     Accept: "application/x-ndjson",
     "Content-Type": "application/json",
-    "X-LOCALFORGE-SESSION": await readSessionToken(),
   });
   let response: Response;
   try {
-    response = await fetch("/api/v1/playground/stream", {
+    response = await fetchWithSession("/api/v1/playground/stream", {
       method: "POST",
       headers,
       body: JSON.stringify(input),
@@ -752,6 +778,7 @@ export async function streamPlaygroundPrompt(
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (error instanceof ApiError) throw error;
     throw new ApiError("The local API could not be reached. Check that it is running, then retry.", 0);
   }
 
@@ -930,3 +957,93 @@ export const startBenchmarkRun = (planId: string, overrideContention = false) =>
     method: "POST",
     body: JSON.stringify({ plan_id: planId, override_contention: overrideContention }),
   });
+
+// --- Workspace settings and hardware detail additions ---
+
+export type WorkspaceSettings = {
+  show_test_fixture_engines: boolean;
+  default_retain_prompt_output: boolean;
+  default_request_timeout_seconds: number;
+  default_warmup_count: number;
+};
+
+export type StorageStatus = {
+  data_directory: string;
+  database_path: string;
+  free_bytes: number | null;
+  total_bytes: number | null;
+  low_space: boolean | null;
+  low_space_threshold_bytes: number;
+};
+
+export type WorkspaceSettingsResponse = {
+  settings: WorkspaceSettings;
+  defaults: WorkspaceSettings;
+  saved: boolean;
+  test_fixture_adapter_ids: string[];
+  storage: StorageStatus;
+};
+
+/** Optional detection details reported by newer APIs; absent values mean unknown. */
+export type AcceleratorDetails = NonNullable<
+  NonNullable<MachineProfile["hardware"]>["accelerators"]
+>[number] & {
+  integrated?: boolean | null;
+  memory_kind?: "dedicated" | "shared" | null;
+  detected_by?: string | null;
+};
+
+export const fetchWorkspaceSettings = () =>
+  apiRequest<WorkspaceSettingsResponse>("/api/v1/settings");
+
+/** Save every setting. Validation failures map each rejected field to its API error type. */
+export async function saveWorkspaceSettings(
+  settings: WorkspaceSettings,
+): Promise<WorkspaceSettingsResponse> {
+  let response: Response;
+  try {
+    response = await fetchWithSession("/api/v1/settings", {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(
+      "The local API could not be reached. Check that it is running, then retry.",
+      0,
+    );
+  }
+  if (response.ok) return (await response.json()) as WorkspaceSettingsResponse;
+  let message = `The local API returned an error (${response.status}).`;
+  let code: string | null = null;
+  const fieldErrors: Record<string, string> = {};
+  try {
+    const payload = (await response.json()) as {
+      detail?: { message?: unknown; code?: unknown; fields?: unknown };
+    };
+    const detail = payload.detail;
+    if (detail && typeof detail === "object") {
+      if (typeof detail.message === "string") message = detail.message;
+      if (typeof detail.code === "string") code = detail.code;
+      if (Array.isArray(detail.fields)) {
+        for (const item of detail.fields as unknown[]) {
+          if (typeof item !== "object" || item === null) continue;
+          const { field, error } = item as { field?: unknown; error?: unknown };
+          if (typeof field !== "string") continue;
+          fieldErrors[field.split(".").at(-1)!] = typeof error === "string" ? error : "invalid";
+        }
+      }
+    }
+  } catch {
+    // Keep the bounded status message if the API response is not JSON.
+  }
+  throw new ApiError(message, response.status, code, null, fieldErrors);
+}
+
+export type HardwareDetails = NonNullable<MachineProfile["hardware"]> & {
+  cpu_physical_cores?: number | null;
+};

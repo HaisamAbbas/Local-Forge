@@ -57,6 +57,10 @@ _DURATION_FIELDS = {
     "prompt_eval_duration": "ollama.prompt_eval_duration",
     "eval_duration": "ollama.eval_duration",
 }
+_COUNT_FIELDS = {
+    "prompt_eval_count": "ollama.prompt_eval_count",
+    "eval_count": "ollama.eval_count",
+}
 _MAX_JSON_BYTES = 2_097_152
 _MAX_CHAT_BYTES = 16_777_216
 _MAX_NDJSON_LINE_CHARS = 1_048_576
@@ -186,17 +190,20 @@ def _usage(payload: Mapping[str, object]) -> UsageCounts | None:
 
 
 def _timing_metrics(payload: Mapping[str, object]) -> list[AdapterMetric]:
+    """Return the final response's server-reported durations (ns) and token counts."""
+
     observed_at = datetime.now(UTC)
     return [
         AdapterMetric(
             metric_name=metric_name,
             value=float(value),
-            unit="ns",
+            unit=unit,
             source=MetricSource.ENGINE_NATIVE,
             kind="gauge",
             observed_at=observed_at,
         )
-        for field, metric_name in _DURATION_FIELDS.items()
+        for fields, unit in ((_DURATION_FIELDS, "ns"), (_COUNT_FIELDS, "tokens"))
+        for field, metric_name in fields.items()
         if (value := _positive_integer(payload.get(field))) is not None
     ]
 
@@ -246,7 +253,7 @@ class OllamaEngineAdapter:
                 "server_reported_durations",
             },
             supported_transports=["http", "ollama_ndjson"],
-            native_metrics=list(_DURATION_FIELDS.values()),
+            native_metrics=[*_DURATION_FIELDS.values(), *_COUNT_FIELDS.values()],
             config_schema={
                 "type": "object",
                 "properties": {

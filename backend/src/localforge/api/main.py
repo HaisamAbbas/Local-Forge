@@ -1,6 +1,7 @@
 """FastAPI application factory and initial health route."""
 
 import asyncio
+import errno
 import logging
 import os
 import sqlite3
@@ -32,8 +33,11 @@ from localforge.api.runs import (
     router as run_router,
 )
 from localforge.api.schemas import LocalSessionResponse
+from localforge.api.settings import router as settings_router
+from localforge.api.settings import visible_catalog_manifests
 from localforge.api.workloads import router as workload_router
 from localforge.core.models import EngineIntegrationMode, EngineProfile, EngineProfileStatus
+from localforge.metrics import backfill_engine_native_metrics_for_finalized_runs
 from localforge.runs import recover_runs_on_startup
 from localforge.security.local_session import (
     SESSION_HEADER_NAME,
@@ -48,6 +52,28 @@ from localforge.storage.repositories import RecordRepository
 
 MAX_DATASET_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 logger = logging.getLogger(__name__)
+
+
+_DISK_FULL_ERRNOS = frozenset(
+    code for code in (errno.ENOSPC, getattr(errno, "EDQUOT", None)) if code is not None
+)
+# ERROR_HANDLE_DISK_FULL and ERROR_DISK_FULL.
+_DISK_FULL_WINERRORS = frozenset({39, 112})
+
+
+def is_storage_full_error(error: BaseException) -> bool:
+    """Return whether an exception means the data volume has no space left."""
+
+    if isinstance(error, sqlite3.Error):
+        if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL:
+            return True
+        return "disk is full" in str(error).lower()
+    if isinstance(error, OSError):
+        return (
+            error.errno in _DISK_FULL_ERRNOS
+            or getattr(error, "winerror", None) in _DISK_FULL_WINERRORS
+        )
+    return False
 
 
 def _disable_unowned_managed_profiles(connection: sqlite3.Connection) -> None:
@@ -196,6 +222,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 recovery_connection,
                 app_instance_id=app_instance_id,
             )
+            try:
+                backfill_engine_native_metrics_for_finalized_runs(recovery_connection)
+            except (sqlite3.Error, ValueError):
+                # Backfilled aggregates are additive conveniences; startup must not depend on them.
+                logger.warning("Engine-native metric backfill was skipped.", exc_info=True)
         finally:
             recovery_connection.close()
         adapter_catalog = app_settings.adapter_catalog_factory()
@@ -315,6 +346,40 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             },
         )
 
+    async def storage_error_handler(request: Request, error: Exception) -> JSONResponse:
+        if not is_storage_full_error(error):
+            logger.exception(
+                "Unhandled storage error for %s %s",
+                request.method,
+                request.url.path,
+                exc_info=error,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": {
+                        "code": "internal_error",
+                        "message": "The local API could not complete the request.",
+                    }
+                },
+            )
+        logger.error("Local storage is full while handling %s", request.url.path)
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "code": "storage_full",
+                    "message": (
+                        "The disk holding LocalForge data is full. Free disk space or set "
+                        "LOCALFORGE_DATA_DIR to a drive with free space, then restart the API."
+                    ),
+                }
+            },
+        )
+
+    application.add_exception_handler(sqlite3.DatabaseError, storage_error_handler)
+    application.add_exception_handler(OSError, storage_error_handler)
+
     @application.get("/health", response_model=HealthResponse, tags=["system"])
     @application.get("/api/v1/health", response_model=HealthResponse, tags=["system"])
     def health(request: Request) -> HealthResponse:
@@ -345,16 +410,17 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         tags=["engines"],
     )
     def engine_catalog(request: Request) -> list[AdapterManifest]:
-        """List the adapters registered through the shared catalog path."""
+        """List registered adapters; test fixtures are hidden unless enabled in Settings."""
 
         catalog = cast(AdapterCatalog, request.app.state.adapter_catalog)
-        return catalog.list_manifests()
+        return visible_catalog_manifests(catalog, cast(Path, request.app.state.database_path))
 
     application.include_router(profile_router)
     application.include_router(playground_router)
     application.include_router(workload_router)
     application.include_router(run_router)
     application.include_router(experiment_router)
+    application.include_router(settings_router)
     application.add_middleware(
         DatasetUploadBodyLimitMiddleware,
         max_upload_bytes=app_settings.max_dataset_upload_bytes,

@@ -159,6 +159,23 @@ different directory for local development, set `LOCALFORGE_DATA_DIR` before star
 $env:LOCALFORGE_DATA_DIR = Join-Path (Get-Location) ".localforge"
 ```
 
+**Settings** (`GET`, `PUT`, or `PATCH /api/v1/settings`) stores workspace preferences in the local
+database: the request timeout applied to newly saved benchmark plans, the warmup count and
+prompt/output retention that prefill the workload builder, and whether test fixture engines are
+shown. The deterministic fake engine is hidden from the engine catalog and the plan builder by
+default, and plans or runs that use it are blocked until **Show test fixture engines** is enabled.
+Existing runs that used it remain readable. Set `LOCALFORGE_SHOW_TEST_FIXTURE_ENGINES=1` to make
+fixtures visible by default before the setting has been saved (the browser test suite does this).
+The same response reports the data directory and its free and total disk space, with a warning
+below 1 GiB free.
+
+**System** detection lists NVIDIA GPUs through `nvidia-smi` and every display adapter through the
+operating system (Win32_VideoController on Windows, `lspci` on Linux, `system_profiler` on macOS).
+Integrated GPUs are labeled as using shared system memory and report no memory size; dedicated
+memory is shown only when the driver reports a 64-bit value (Windows `HardwareInformation.qwMemorySize`)
+or `nvidia-smi` reports it. The Windows processor name comes from the registry, and physical cores
+are reported when the operating system exposes them.
+
 Dataset uploads are limited to 100 MiB by default. Set `LOCALFORGE_MAX_DATASET_UPLOAD_BYTES` to a
 positive byte count to change the limit. Retained dataset snapshots are stored under the configured
 LOCALFORGE data directory in `datasets/`.

@@ -26,11 +26,21 @@ response. Both shapes normalize into the shared output, usage, completion, error
 Prompt/evaluation counts populate the run's token sample when Ollama returns both values.
 
 The adapter stores `total_duration`, `load_duration`, `prompt_eval_duration`, and `eval_duration`
-from the final chat response as separate raw `ENGINE_NATIVE` metrics with unit `ns`, the Ollama
-server version, adapter identity, request ID, and workload phase. These values are server-reported
-per-request observations; they are not client-observed latency and are not aggregated into a
-Prometheus scrape. The regular run sample still records client-observed latency and time to first
-token independently.
+from the final chat response as separate raw `ENGINE_NATIVE` metrics with unit `ns`, and
+`prompt_eval_count` and `eval_count` as `ollama.prompt_eval_count` and `ollama.eval_count` with unit
+`tokens`. Each record carries the Ollama server version, adapter identity, request ID, and workload
+phase. These values are server-reported per-request observations; they are not client-observed
+latency. The regular run sample still records client-observed latency and time to first token
+independently.
+
+At finalization, measurement-phase values are summarized per run (`mean`, `p50`, `p90`, `p95`,
+`p99`, source `engine_native`), and two engine-timed rates are derived:
+`ollama.eval_rate_tokens_per_second` (decode: `sum(eval_count) / sum(eval_duration s)`) and
+`ollama.prompt_eval_rate_tokens_per_second` (prefill: `sum(prompt_eval_count) /
+sum(prompt_eval_duration s)`). They stay separate from the client-timed throughput metrics, and the
+cross-engine `prompt_processing_throughput_tokens_per_second` remains unavailable for Ollama. See
+[metrics](metrics.md) for formulas, quality flags, and the startup backfill for older runs. Ollama has
+no aggregate metrics endpoint, so runs do not record before/after snapshot placeholders.
 
 `GET /api/version` identifies the Ollama server layer. The runner is stored as `unknown` unless a
 future API response provides verifiable runner identity. Model family, quantization, and file format

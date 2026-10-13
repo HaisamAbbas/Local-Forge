@@ -5730,3 +5730,526 @@ table td {
     gap: 14px;
   }
 }
+
+/* ==========================================================================
+   Data charts (hand-rolled SVG: components/charts/*)
+   Single-series and emphasis marks use the app accent; chrome uses ink/border
+   tokens so charts follow whichever theme defines them. Dark is the default;
+   a light theme is opted into with :root[data-theme="light"].
+   ========================================================================== */
+
+.lf-chart,
+.lf-chart__plot {
+  --chart-mark: var(--color-primary);
+  --chart-mark-muted: var(--color-text-subtle);
+  --chart-grid: var(--color-border-subtle);
+  --chart-axis: var(--color-text-subtle);
+  --chart-ink: var(--color-text-secondary);
+  --chart-ink-muted: var(--color-text-muted);
+  --chart-surface: var(--color-surface-raised);
+  --chart-ring: var(--color-surface-raised);
+}
+
+.lf-chart {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--chart-surface);
+}
+
+:root[data-theme="light"] .lf-chart,
+:root[data-theme="light"] .lf-chart__plot {
+  --chart-mark: #5d7a0a;
+  --chart-mark-muted: #8a8d82;
+}
+
+.lf-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.lf-chart-grid--compact {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+}
+
+.lf-chart-group-title {
+  margin: var(--space-5) 0 0;
+  color: var(--color-text);
+  font-size: var(--font-size-base);
+}
+
+.lf-chart__header {
+  display: grid;
+  gap: 2px;
+}
+
+.lf-chart .lf-chart__title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.lf-chart__subtitle,
+.lf-chart__caption {
+  margin: 0;
+  color: var(--chart-ink-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.lf-chart__plot {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.lf-chart__svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.lf-chart__svg:focus-visible {
+  outline: 2px solid var(--color-primary-text);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.lf-chart__grid line {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.lf-chart__axis {
+  stroke: var(--chart-axis);
+  stroke-width: 1;
+}
+
+.lf-chart__tick,
+.lf-chart__category {
+  fill: var(--chart-ink-muted);
+  font-size: 12px;
+}
+
+.lf-chart__category {
+  fill: var(--chart-ink);
+}
+
+.lf-chart__axis-label {
+  fill: var(--chart-ink);
+  font-size: 12px;
+}
+
+.lf-chart__value {
+  fill: var(--chart-ink);
+  font-size: 12px;
+}
+
+.lf-chart__unavailable {
+  fill: var(--chart-ink-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.lf-chart__dot {
+  fill: var(--chart-mark);
+  stroke: var(--chart-ring);
+  stroke-width: 2;
+}
+
+.lf-chart__dot.is-active {
+  stroke: var(--color-text);
+}
+
+.lf-chart__bar {
+  fill: var(--chart-mark);
+}
+
+.lf-chart__bar.is-muted {
+  fill: var(--chart-mark-muted);
+}
+
+.lf-chart__bar.is-active {
+  opacity: 0.8;
+}
+
+.lf-chart__zero-mark {
+  stroke: var(--chart-mark);
+  stroke-width: 2;
+}
+
+.lf-chart__line {
+  fill: none;
+  stroke: var(--chart-mark);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.lf-chart__area {
+  fill: var(--chart-mark);
+  opacity: 0.1;
+}
+
+.lf-chart__whisker line {
+  stroke: var(--color-text);
+  stroke-width: 1.5;
+}
+
+.lf-chart__crosshair {
+  stroke: var(--chart-axis);
+  stroke-width: 1;
+}
+
+.lf-chart__row-highlight {
+  fill: var(--color-surface-hover);
+}
+
+.lf-chart__tooltip rect {
+  fill: var(--color-surface);
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.lf-chart__tooltip text {
+  fill: var(--chart-ink);
+  font-size: 12px;
+}
+
+.lf-chart__tooltip .lf-chart__tooltip-title {
+  fill: var(--color-text);
+  font-weight: 600;
+}
+
+.lf-chart__table summary {
+  width: fit-content;
+  color: var(--chart-ink);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.lf-chart__table .table-scroll {
+  margin-top: var(--space-2);
+}
+
+.lf-chart__table caption {
+  padding: 0 0 var(--space-1);
+  color: var(--chart-ink-muted);
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+.lf-chart__empty {
+  margin: 0;
+}
+
+@media (forced-colors: active) {
+  .lf-chart__dot,
+  .lf-chart__bar,
+  .lf-chart__area {
+    fill: CanvasText;
+  }
+
+  .lf-chart__line,
+  .lf-chart__whisker line {
+    stroke: CanvasText;
+  }
+}
+
+/* --- Settings screen --- */
+.settings-path {
+  font-family:
+    ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-storage-warning {
+  margin-bottom: 1rem;
+}
+
+.settings-actions {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Run detail: key results and condensed measurements
+   --------------------------------------------------------------------------- */
+
+.key-results {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.key-result {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 4px;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.key-result--warning {
+  border-color: var(--color-warning-border);
+}
+
+.key-result__label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+}
+
+.key-result__qualifier {
+  color: var(--color-text-subtle);
+}
+
+.key-result__value {
+  color: var(--color-text-strong);
+  font-size: var(--font-size-xl);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.key-result--warning .key-result__value {
+  color: var(--color-warning-text);
+}
+
+.key-result__detail {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.measurements {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
+}
+
+.measure-block {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.measure-block h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.measure-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.measure-card {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.measure-table {
+  width: 100%;
+  font-size: var(--font-size-xs);
+}
+
+.measure-table th[scope="row"] {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.measure-num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-scroll .measure-table th,
+.table-scroll .measure-table td {
+  padding: 8px 12px;
+  font-size: var(--font-size-xs);
+  vertical-align: middle;
+}
+
+.table-scroll .measure-table .measure-num {
+  text-align: right;
+}
+
+.table-scroll .measure-table td.measure-num {
+  color: var(--color-text);
+}
+
+.table-scroll .measure-table td.measure-muted {
+  color: var(--color-text-subtle);
+}
+
+.measure-table--records td {
+  vertical-align: top;
+}
+
+.measure-unit {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.measure-muted {
+  color: var(--color-text-subtle);
+}
+
+.measure-na {
+  color: var(--color-text-subtle);
+  cursor: help;
+}
+
+.measure-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.measure-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.measure-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+}
+
+.measure-list > div:last-child {
+  border-bottom: 0;
+}
+
+.measure-list dt {
+  color: var(--color-text-secondary);
+}
+
+.measure-list dd {
+  margin: 0;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.measure-list--inline {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  column-gap: var(--space-4);
+}
+
+.measure-levels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.measure-level {
+  min-width: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.measure-level--active {
+  border-color: var(--color-primary);
+  background: var(--color-surface-primary);
+  color: var(--color-primary-text);
+}
+
+.measure-details > summary {
+  color: var(--cyan);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.measure-details[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.metric-explorer {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.metric-explorer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--font-size-xs);
+}
+
+.metric-explorer__controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text-secondary);
+}
+
+.metric-explorer__controls select,
+.metric-explorer__controls input {
+  min-width: 200px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.metric-explorer > .button {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 1100px) {
+  .key-results {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .key-results,
+  .measure-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .measure-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -33,6 +33,9 @@ import {
   summarizedMeanLatency,
   summarizedRequestThroughput,
 } from "../lib/run-state";
+import { RunRequestCharts } from "./RunCharts";
+import { RunKeyResults, RunMeasurements } from "./RunMeasurements";
+import { RequestPointChart } from "./charts/RequestPointChart";
 
 const EVENT_TYPES = [
   "run_status",
@@ -229,6 +232,8 @@ export function RunsScreen({
   onSelectRun: (id: string | null) => void;
 }) {
   const [runs, setRuns] = useState<BenchmarkRun[]>([]);
+  const [planNames, setPlanNames] = useState<Map<string, string>>(new Map());
+  const planNamesRef = useRef(new Map<string, string>());
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail>(EMPTY_DETAIL);
@@ -244,8 +249,21 @@ export function RunsScreen({
 
   const refreshHistory = useCallback(async () => {
     try {
-      setRuns(await listRuns(100));
+      const nextRuns = await listRuns(100);
+      setRuns(nextRuns);
       setHistoryError(null);
+      if (nextRuns.some((run) => !planNamesRef.current.has(run.plan_id))) {
+        try {
+          const plans = await listBenchmarkPlans();
+          planNamesRef.current = new Map(plans.map((plan) => [plan.id, plan.name]));
+          // Remember unknown ids too so a deleted plan does not refetch every refresh.
+          for (const run of nextRuns)
+            if (!planNamesRef.current.has(run.plan_id)) planNamesRef.current.set(run.plan_id, "");
+          setPlanNames(new Map(planNamesRef.current));
+        } catch {
+          // Names are a convenience; history still lists runs by id.
+        }
+      }
     } catch (error) {
       setHistoryError(errorMessage(error));
     } finally {
@@ -620,15 +638,6 @@ export function RunsScreen({
       Number.isFinite(sample.latency_ms),
   );
   const warnings = detail.events.filter((event) => event.event_type === "warning");
-  const normalizedMetrics = detail.metrics.filter(
-    (metric) => metric.source !== "engine_native" && metric.aggregation !== "raw",
-  );
-  const rawEngineMetrics = detail.metrics.filter(
-    (metric) => metric.source === "engine_native" && metric.aggregation === "raw",
-  );
-  const engineMetricDeltas = detail.metrics.filter(
-    (metric) => metric.source === "engine_native" && metric.aggregation !== "raw",
-  );
 
   async function confirmCancellation() {
     if (!selectedRun || selectedIsTerminal || selectedRun.status === "cancelling") return;
@@ -714,13 +723,17 @@ export function RunsScreen({
                       <RunStatus status={run.status} />
                       <time dateTime={run.created_at}>{formatDate(run.created_at)}</time>
                     </span>
-                    <span className="run-history-item__id">Run {run.id.slice(0, 8)}</span>
+                    <span className="run-history-item__id">
+                      {planNames.get(run.plan_id) || `Run ${run.id.slice(0, 8)}`}
+                    </span>
                     <span className="run-history-item__meta">
                       {run.error_code
                         ? `Error: ${run.error_code}`
                         : run.potentially_contended
                           ? "Potentially contended"
-                          : `Plan ${run.plan_id.slice(0, 8)}`}
+                          : planNames.get(run.plan_id)
+                            ? `Run ${run.id.slice(0, 8)}`
+                            : `Plan ${run.plan_id.slice(0, 8)}`}
                     </span>
                   </button>
                 </li>
@@ -839,77 +852,44 @@ export function RunsScreen({
               </div>
             )}
 
-            <div className="run-summary-grid" aria-label="Run progress counts">
-              <RunFact
-                label="Elapsed"
-                value={formatDuration(elapsed)}
-                detail={
-                  selectedRun.completed_at
-                    ? "Latest persisted monotonic run offset"
-                    : "Display estimate; metric durations use monotonic offsets"
-                }
-              />
-              <RunFact
-                label="Measurement requests"
-                value={counts.attempted.toLocaleString()}
-                detail={`${counts.incomplete} in progress · ${detail.catchingUp ? "loading saved measurement samples" : "measurement samples"}`}
-              />
-              <RunFact
-                label="Warmup requests"
-                value={counts.warmup.toLocaleString()}
-                detail="Excluded from normalized measurement summaries"
-              />
-              <RunFact
-                label="Succeeded"
-                value={counts.succeeded.toLocaleString()}
-                detail="Measurement requests"
-              />
-              <RunFact
-                label="Failed"
-                value={counts.failed.toLocaleString()}
-                detail="Failed, disconnected, or interrupted"
-              />
-              <RunFact
-                label="Timed out"
-                value={counts.timedOut.toLocaleString()}
-                detail="Distinct from other failures"
-              />
-              <RunFact
-                label="Cancelled"
-                value={counts.cancelled.toLocaleString()}
-                detail="Request outcomes recorded"
-              />
-              <RunFact
-                label="Mean latency"
-                value={formatNumber(liveLatency.value, "ms")}
-                detail={`${liveLatency.sampleCount} client-measured observations · arithmetic mean`}
-              />
-              <RunFact
-                label="Observed throughput"
-                value={formatNumber(liveThroughput.value, "requests/s")}
-                detail={
-                  liveThroughput.reason
-                    ? `${liveThroughput.sampleCount} terminal samples · ${liveThroughput.reason}`
-                    : `${liveThroughput.sampleCount} terminal samples · client-derived observed window`
-                }
-              />
-              <RunFact
-                label="Latency samples"
-                value={counts.latencySampleCount.toLocaleString()}
-                detail="Measured requests · ms"
-              />
-              <RunFact
-                label="Normalized metrics"
-                value={normalizedMetrics.length.toLocaleString()}
-                detail="Persisted with source and sample count"
-              />
-            </div>
+            <RunKeyResults
+              metrics={detail.metrics}
+              counts={counts}
+              elapsed={formatDuration(elapsed)}
+              liveLatency={liveLatency}
+              liveThroughput={liveThroughput}
+            />
 
             <LatencyChart
               samples={latencySamples}
               totalSampleCount={counts.latencySampleCount}
               catchingUp={detail.catchingUp}
             />
+
+            <RunRequestCharts
+              catchingUp={detail.catchingUp}
+              metrics={detail.metrics}
+              samples={detail.samples}
+            />
+
+            <section className="run-subsection" aria-labelledby="run-metrics-title">
+              <div className="section-title-row">
+                <div>
+                  <h3 id="run-metrics-title">Measurements</h3>
+                  <p className="helper-copy">
+                    Summaries over measured requests (warmup excluded). Hover a value for its
+                    definition; every record with its formula and quality flags is under All metric
+                    records.
+                  </p>
+                </div>
+              </div>
+              <RunMeasurements
+                metrics={detail.metrics}
+                runStartedAt={selectedRun.started_at ?? selectedRun.created_at}
+                catchingUp={detail.catchingUp}
+                telemetryEvent={detail.systemSample ?? undefined}
+              />
+            </section>
 
             <section className="run-subsection" aria-labelledby="run-provenance-title">
               <div className="section-title-row">
@@ -989,33 +969,39 @@ export function RunsScreen({
                     </p>
                     {detail.metadata.engine?.capabilities &&
                     Object.keys(detail.metadata.engine.capabilities).length > 0 ? (
-                      <div className="table-scroll">
-                        <table>
-                          <caption>
-                            {detail.metadata.engineSource === "captured"
-                              ? "Engine capabilities captured when the run was queued"
-                              : "Current saved engine capability snapshot"}
-                          </caption>
-                          <thead>
-                            <tr>
-                              <th scope="col">Capability</th>
-                              <th scope="col">State</th>
-                              <th scope="col">Details</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {Object.entries(detail.metadata.engine.capabilities).map(
-                              ([name, value]) => (
-                                <tr key={name}>
-                                  <th scope="row">{name}</th>
-                                  <td>{value.state}</td>
-                                  <td>{value.details ?? value.source ?? "Not reported"}</td>
-                                </tr>
-                              ),
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
+                      <details className="run-config-details">
+                        <summary>
+                          Engine capabilities (
+                          {Object.keys(detail.metadata.engine.capabilities).length})
+                        </summary>
+                        <div className="table-scroll">
+                          <table>
+                            <caption>
+                              {detail.metadata.engineSource === "captured"
+                                ? "Engine capabilities captured when the run was queued"
+                                : "Current saved engine capability snapshot"}
+                            </caption>
+                            <thead>
+                              <tr>
+                                <th scope="col">Capability</th>
+                                <th scope="col">State</th>
+                                <th scope="col">Details</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(detail.metadata.engine.capabilities).map(
+                                ([name, value]) => (
+                                  <tr key={name}>
+                                    <th scope="row">{name}</th>
+                                    <td>{value.state}</td>
+                                    <td>{value.details ?? value.source ?? "Not reported"}</td>
+                                  </tr>
+                                ),
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
                     ) : (
                       <p className="empty-inline">
                         Engine capabilities were not saved for this profile.
@@ -1033,33 +1019,6 @@ export function RunsScreen({
                   </details>
                 </>
               )}
-            </section>
-
-            <section className="run-subsection" aria-labelledby="run-metrics-title">
-              <div className="section-title-row">
-                <div>
-                  <h3 id="run-metrics-title">Measurements</h3>
-                  <p className="helper-copy">
-                    Each value keeps its unit, source, sample count, formula, and quality flags.
-                    Unavailable is different from zero.
-                  </p>
-                </div>
-              </div>
-              <MetricTable title="Normalized and client metrics" metrics={normalizedMetrics} />
-              <MetricTable title="Raw engine-native observations" metrics={rawEngineMetrics} />
-              <MetricTable title="Engine-native deltas" metrics={engineMetricDeltas} />
-              {detail.metrics.length === 0 && (
-                <p className="empty-inline">
-                  {detail.catchingUp
-                    ? "Restoring persisted metric and request-sample history."
-                    : "No persisted metric records yet. Summary metrics are written as the run finalizes; request latency observations above come from stored request samples."}
-                </p>
-              )}
-              <ResourceTelemetry
-                event={detail.systemSample ?? undefined}
-                metrics={detail.metrics.filter((metric) => metric.source === "system_observed")}
-                catchingUp={detail.catchingUp}
-              />
             </section>
 
             <section className="run-subsection" aria-labelledby="run-samples-title">
@@ -1138,16 +1097,6 @@ export function RunsScreen({
   );
 }
 
-function RunFact({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="run-fact">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
-  );
-}
-
 function Fingerprint({ plan }: { plan: BenchmarkPlan | null }) {
   const [digest, setDigest] = useState<string | null>(null);
   useEffect(() => {
@@ -1176,17 +1125,7 @@ function LatencyChart({
   totalSampleCount: number;
   catchingUp: boolean;
 }) {
-  const width = 680;
-  const height = 220;
-  const left = 54;
-  const right = 18;
-  const top = 20;
-  const bottom = 42;
   const displayedSamples = samples.slice(-500);
-  const observed = displayedSamples.map((sample) => sample.latency_ms ?? 0);
-  const maximum = observed.reduce((current, value) => Math.max(current, value), 1);
-  const chartWidth = width - left - right;
-  const chartHeight = height - top - bottom;
   return (
     <section className="run-subsection" aria-labelledby="run-latency-chart-title">
       <div className="section-title-row">
@@ -1209,87 +1148,46 @@ function LatencyChart({
       ) : (
         <>
           <div className="run-chart-scroll">
-            <svg
-              aria-label={`Request latency chart with ${displayedSamples.length} of ${totalSampleCount} observed samples shown, in milliseconds`}
-              className="run-latency-chart"
-              role="img"
-              viewBox={`0 0 ${width} ${height}`}
-            >
-              {[0, 0.5, 1].map((fraction) => {
-                const y = top + chartHeight * (1 - fraction);
-                return (
-                  <g key={fraction}>
-                    <line x1={left} x2={width - right} y1={y} y2={y} />
-                    <text x={left - 8} y={y + 4} textAnchor="end">
-                      {Math.round(maximum * fraction)}
-                    </text>
-                  </g>
-                );
-              })}
-              <line className="run-chart-axis" x1={left} x2={left} y1={top} y2={height - bottom} />
-              <line
-                className="run-chart-axis"
-                x1={left}
-                x2={width - right}
-                y1={height - bottom}
-                y2={height - bottom}
-              />
-              {displayedSamples.map((sample, index) => {
-                const x =
-                  displayedSamples.length === 1
-                    ? left + chartWidth / 2
-                    : left + (index / (displayedSamples.length - 1)) * chartWidth;
-                const y = top + chartHeight * (1 - (sample.latency_ms ?? 0) / maximum);
-                return (
-                  <circle
-                    key={sample.sequence_number}
-                    cx={x}
-                    cy={y}
-                    r="4"
-                    aria-label={`Request ${sample.sequence_number + 1}: ${formatNumber(sample.latency_ms, "ms")}`}
-                  />
-                );
-              })}
-              <text
-                className="run-chart-axis-label"
-                transform={`translate(14 ${top + chartHeight / 2}) rotate(-90)`}
-                textAnchor="middle"
-              >
-                Latency (ms)
-              </text>
-              <text
-                className="run-chart-axis-label"
-                x={left + chartWidth / 2}
-                y={height - 8}
-                textAnchor="middle"
-              >
-                Measured request sample index
-              </text>
-            </svg>
+            <RequestPointChart
+              ariaLabel={`Request latency chart with ${displayedSamples.length} of ${totalSampleCount} observed samples shown, in milliseconds`}
+              points={displayedSamples.map((sample) => ({
+                key: String(sample.sequence_number),
+                requestNumber: sample.sequence_number + 1,
+                value: sample.latency_ms as number, // latencySamples are pre-filtered to finite values
+                detail: sample.outcome,
+              }))}
+              unit="ms"
+              valueLabel="Latency"
+              xLabel="Measured request sequence number"
+              yLabel="Latency (ms)"
+            />
           </div>
-          <div className="table-scroll">
-            <table>
-              <caption>Accessible table of the latency points shown in the chart</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Sample</th>
-                  <th scope="col">Outcome</th>
-                  <th scope="col">Latency</th>
-                  <th scope="col">Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedSamples.map((sample) => (
-                  <tr key={sample.sequence_number}>
-                    <th scope="row">{sample.sequence_number + 1}</th>
-                    <td>{sample.outcome}</td>
-                    <td>{formatNumber(sample.latency_ms, "ms")}</td>
-                    <td>Client measured</td>
+          <details className="lf-chart__table">
+            <summary>Data table ({displayedSamples.length} rows)</summary>
+            <div className="table-scroll">
+              <table>
+                <caption>Accessible table of the latency points shown in the chart</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Sample</th>
+                    <th scope="col">Outcome</th>
+                    <th scope="col">Latency</th>
+                    <th scope="col">Source</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {displayedSamples.map((sample) => (
+                    <tr key={sample.sequence_number}>
+                      <th scope="row">{sample.sequence_number + 1}</th>
+                      <td>{sample.outcome}</td>
+                      <td>{formatNumber(sample.latency_ms, "ms")}</td>
+                      <td>Client measured</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
           {totalSampleCount > displayedSamples.length && (
             <p className="source-note">
               Showing the latest {displayedSamples.length} of {totalSampleCount} measured latency
@@ -1299,92 +1197,6 @@ function LatencyChart({
         </>
       )}
     </section>
-  );
-}
-
-function MetricTable({ title, metrics }: { title: string; metrics: MetricSample[] }) {
-  return (
-    <section className="metric-group" aria-label={title}>
-      <h4>{title}</h4>
-      {metrics.length === 0 ? (
-        <p className="empty-inline">No records in this category.</p>
-      ) : (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Metric</th>
-                <th scope="col">Value</th>
-                <th scope="col">Unit</th>
-                <th scope="col">Source</th>
-                <th scope="col">Samples</th>
-                <th scope="col">Definition and quality</th>
-              </tr>
-            </thead>
-            <tbody>
-              {metrics.map((metric, index) => (
-                <tr key={`${metric.metric_name}-${metric.aggregation}-${index}`}>
-                  <th scope="row">
-                    {metric.metric_name}
-                    <small className="table-subtext">{metric.aggregation}</small>
-                  </th>
-                  <td>{metric.value === null ? "Unavailable" : formatNumber(metric.value)}</td>
-                  <td>{metric.unit}</td>
-                  <td>{metric.source}</td>
-                  <td>{metric.sample_count.toLocaleString()}</td>
-                  <td>
-                    <span>{metric.definition}</span>
-                    <small className="table-subtext">
-                      Formula: {metric.formula} · {metric.method_version}
-                      {metric.quality_flags.length ? ` · ${metric.quality_flags.join(", ")}` : ""}
-                    </small>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function ResourceTelemetry({
-  event,
-  metrics,
-  catchingUp,
-}: {
-  event: RunEventRecord | undefined;
-  metrics: MetricSample[];
-  catchingUp: boolean;
-}) {
-  if (metrics.length > 0)
-    return (
-      <p className="source-note">
-        System telemetry is available from {metrics.map((metric) => metric.source).join(", ")}{" "}
-        sources; inspect values and units in the metrics table.
-      </p>
-    );
-  if (event?.payload.available === true)
-    return (
-      <p className="source-note">
-        A system telemetry sample was reported; normalized resource metric values are not available.
-      </p>
-    );
-  if (event)
-    return (
-      <p className="source-note">
-        Resource telemetry unavailable:{" "}
-        {String(event.payload.reason ?? "the host sampler did not report readings")}. This is
-        unavailable data, not zero usage.
-      </p>
-    );
-  return (
-    <p className="source-note">
-      {catchingUp
-        ? "Restoring telemetry availability from persisted events."
-        : "No resource telemetry was reported for this run."}
-    </p>
   );
 }
 

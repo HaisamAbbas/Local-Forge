@@ -296,10 +296,19 @@ def test_chat_stream_normalizes_usage_and_server_timings() -> None:
                 "ollama.load_duration": 500_000,
                 "ollama.prompt_eval_duration": 700_000,
                 "ollama.eval_duration": 900_000,
+                "ollama.prompt_eval_count": 6,
+                "ollama.eval_count": 3,
+            }
+            assert {metric.metric_name: metric.unit for metric in usage.native_metrics} == {
+                "ollama.total_duration": "ns",
+                "ollama.load_duration": "ns",
+                "ollama.prompt_eval_duration": "ns",
+                "ollama.eval_duration": "ns",
+                "ollama.prompt_eval_count": "tokens",
+                "ollama.eval_count": "tokens",
             }
             assert all(
-                metric.unit == "ns" and metric.source is MetricSource.ENGINE_NATIVE
-                for metric in usage.native_metrics
+                metric.source is MetricSource.ENGINE_NATIVE for metric in usage.native_metrics
             )
             chat = next(request for request in server.requests if request["path"] == "/api/chat")
             assert chat["body"]["stream"] is True
@@ -329,7 +338,7 @@ def test_nonstream_response_maps_usage_and_options() -> None:
             assert chat["body"]["options"] == {"seed": 8, "num_predict": 48}
             usage = next(event for event in events if event.event_type is StreamEventType.USAGE)
             assert usage.usage is not None and usage.usage.input_tokens == 6
-            assert len(usage.native_metrics) == 4
+            assert len(usage.native_metrics) == 6
         finally:
             await adapter.close()
             await server.close()

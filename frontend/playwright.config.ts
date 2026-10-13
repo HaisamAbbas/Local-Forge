@@ -32,6 +32,8 @@ export default defineConfig({
       timeout: 60_000,
       env: {
         LOCALFORGE_DATA_DIR: testDataDirectory,
+        // Browser checks drive the deterministic fake engine, which is hidden by default.
+        LOCALFORGE_SHOW_TEST_FIXTURE_ENGINES: "1",
       },
     },
     {

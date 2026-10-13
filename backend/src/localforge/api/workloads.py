@@ -65,6 +65,12 @@ from localforge.dataset_storage import (
 )
 from localforge.storage.database import transaction
 from localforge.storage.repositories import RecordRepository
+from localforge.workspace_settings import (
+    TEST_FIXTURE_BLOCKER_CODE,
+    TEST_FIXTURE_BLOCKER_MESSAGE,
+    is_test_fixture_engine_blocked,
+    load_workspace_settings,
+)
 
 router = APIRouter(prefix="/api/v1")
 MAX_PREVIEW_ROWS = 3
@@ -472,6 +478,8 @@ def _preflight(
             manifest = None
             missing.append("installed engine adapter")
             _add_issue(blockers, "adapter_missing", "The engine adapter is not installed.")
+        if is_test_fixture_engine_blocked(connection, catalog, engine.adapter_id):
+            _add_issue(blockers, TEST_FIXTURE_BLOCKER_CODE, TEST_FIXTURE_BLOCKER_MESSAGE)
 
         machine_id = body.machine_profile_id or engine.machine_profile_id
         target_machine_id = machine_id
@@ -924,7 +932,7 @@ def create_benchmark_plan(
             if workload
             else 1
         ),
-        timeout_seconds=120,
+        timeout_seconds=load_workspace_settings(connection).default_request_timeout_seconds,
         retain_prompt_output=body.retain_prompt_output,
         dataset_snapshot_hash=snapshot_hash,
         configuration_snapshot=cast(dict[str, JsonValue], configuration_snapshot),

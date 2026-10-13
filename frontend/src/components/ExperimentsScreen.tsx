@@ -15,6 +15,7 @@ import {
   listRuns,
   startExperimentGroup,
 } from "../lib/api";
+import { ExperimentVariantCharts, RunComparisonCharts } from "./ComparisonCharts";
 import type {
   BenchmarkPlan,
   BenchmarkRun,
@@ -94,6 +95,14 @@ function sleep(milliseconds: number): Promise<void> {
 export function ExperimentsScreen() {
   const [runs, setRuns] = useState<BenchmarkRun[]>([]);
   const [plans, setPlans] = useState<BenchmarkPlan[]>([]);
+  const planNames = useMemo(() => new Map(plans.map((plan) => [plan.id, plan.name])), [plans]);
+  const runLabel = useCallback(
+    (runId: string) => {
+      const run = runs.find((item) => item.id === runId);
+      return (run && planNames.get(run.plan_id)) ?? `Run ${shortRun(runId)}`;
+    },
+    [runs, planNames],
+  );
   const [groups, setGroups] = useState<ExperimentGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -488,7 +497,16 @@ export function ExperimentsScreen() {
                   type="checkbox"
                 />
                 <span>
-                  <strong>Run {shortRun(run.id)}</strong>
+                  <strong>{planNames.get(run.plan_id) ?? `Run ${shortRun(run.id)}`}</strong>
+                  <small>
+                    {[
+                      run.profile_snapshot?.engine?.engine_display_name ??
+                        run.profile_snapshot?.engine?.label,
+                      `Run ${shortRun(run.id)}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
                   <small>
                     {run.status} ·{" "}
                     {new Date(
@@ -540,6 +558,9 @@ export function ExperimentsScreen() {
               ))}
             </div>
             <h3>Shared metrics</h3>
+            {comparison.shared_metrics.length > 0 && (
+              <RunComparisonCharts comparison={comparison} runLabel={runLabel} />
+            )}
             {comparison.shared_metrics.length === 0 ? (
               <p className="experiments-empty">
                 No metrics have matching units, sources, formulas, and aggregation across every
@@ -553,7 +574,12 @@ export function ExperimentsScreen() {
                       <th>Metric</th>
                       <th>Definition and source</th>
                       {comparison.run_ids.map((id) => (
-                        <th key={id}>Run {shortRun(id)}</th>
+                        <th key={id}>
+                          {runLabel(id)}
+                          {runLabel(id) !== `Run ${shortRun(id)}` && (
+                            <small className="table-subtext">Run {shortRun(id)}</small>
+                          )}
+                        </th>
                       ))}
                     </tr>
                   </thead>
@@ -612,6 +638,7 @@ export function ExperimentsScreen() {
                     listed below.
                   </p>
                 </div>
+                <ExperimentVariantCharts summary={experimentSummary} />
                 <div className="comparison-table-wrap">
                   <table className="comparison-table">
                     <thead>

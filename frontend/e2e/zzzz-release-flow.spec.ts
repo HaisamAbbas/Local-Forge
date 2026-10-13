@@ -121,17 +121,19 @@ test("completes the model-free release workflow from local setup through redacte
   await expect(runDetail.getByText(/Live event stream connected/)).toBeVisible({ timeout: 10_000 });
   await expect(runDetail.locator(".status-pill")).toHaveText("completed", { timeout: 20_000 });
   await expect(
-    runDetail.locator(".run-fact").filter({ hasText: "Latency samples" }).locator("strong"),
-  ).toHaveText("2");
-  for (const label of ["Mean latency", "Observed throughput"]) {
+    runDetail.locator(".key-result").filter({ hasText: "Succeeded" }).locator("strong"),
+  ).toHaveText("2 / 2");
+  for (const label of ["Request latency", "Request rate"]) {
     await expect(
-      runDetail.locator(".run-fact").filter({ hasText: label }).locator("strong"),
-    ).not.toHaveText("Unavailable");
+      runDetail.locator(".key-result").filter({ hasText: label }).locator("strong"),
+    ).not.toHaveText(/^(Unavailable|—)$/);
   }
   await expect(
     runDetail.getByRole("heading", { name: "Request latency observations" }),
   ).toBeVisible();
-  await expect(runDetail).toContainText("System telemetry is available from system_observed");
+  await expect(
+    runDetail.getByRole("heading", { name: "Resource usage during the run" }),
+  ).toBeVisible();
 
   // 7. Launch a second run and verify that cancellation reaches a terminal cancelled state.
   await page.goto("/#workloads");
@@ -166,17 +168,17 @@ test("completes the model-free release workflow from local setup through redacte
   await expect(reopenedDetail.getByRole("heading", { name: baselinePlanName })).toBeVisible();
   await expect(reopenedDetail.locator(".status-pill")).toHaveText("completed");
   await expect(reopenedDetail).toContainText("Bodies retained by plan opt-in");
-  const normalizedMetrics = reopenedDetail.locator(
-    '.metric-group[aria-label="Normalized and client metrics"]',
-  );
-  await expect(normalizedMetrics.locator("tbody tr").first()).toBeVisible();
-  await expect(normalizedMetrics).toContainText("derived");
-  const rawEngineMetrics = reopenedDetail.locator(
-    '.metric-group[aria-label="Raw engine-native observations"]',
-  );
-  await expect(rawEngineMetrics).toContainText("fake.requests_total");
-  await expect(rawEngineMetrics).toContainText("engine_native");
-  await expect(rawEngineMetrics).toContainText("Unavailable");
+  await expect(reopenedDetail.getByRole("heading", { name: "Latency and timing" })).toBeVisible();
+  const metricExplorer = reopenedDetail.locator(".metric-explorer");
+  await metricExplorer.locator("summary").click();
+  const explorerSource = metricExplorer.getByLabel("Source");
+  await explorerSource.selectOption("derived");
+  await expect(metricExplorer.locator("tbody tr").first()).toBeVisible();
+  await expect(metricExplorer.locator("tbody")).toContainText("derived");
+  await explorerSource.selectOption("engine_native");
+  await expect(metricExplorer.locator("tbody")).toContainText("fake.requests_total");
+  await expect(metricExplorer.locator("tbody")).toContainText("engine_native");
+  await expect(metricExplorer.locator("tbody")).toContainText("Unavailable");
   await expect(reopenedDetail).not.toContainText(secret);
 
   // 9. Change one declared workload value and review the two-run comparability explanation.

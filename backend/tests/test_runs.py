@@ -46,7 +46,10 @@ from localforge.core.models import (
     WorkloadPreset,
     WorkloadStatus,
 )
-from localforge.metrics import persist_derived_run_metrics
+from localforge.metrics import (
+    backfill_engine_native_metrics_for_finalized_runs,
+    persist_derived_run_metrics,
+)
 from localforge.runs import (
     InvalidRunTransition,
     ResourceLockConflict,
@@ -852,6 +855,133 @@ def test_worker_persists_request_native_metrics_with_adapter_provenance(tmp_path
         assert all(item.engine_version == "fixture-ollama-server" for item in request_metrics)
         assert all(item.labels["phase"] == "measurement" for item in request_metrics)
         assert all("request_id" in item.labels for item in request_metrics)
+    finally:
+        connection.close()
+
+
+def test_per_request_native_adapter_gets_token_counts_and_run_aggregates_without_snapshots(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "request-native-aggregates.sqlite3"
+    initialize_database(database_path)
+    connection = open_database(database_path)
+    try:
+        run, plan, _, workload = _worker_fixture(connection)
+        RecordRepository(connection, BenchmarkPlan).update(
+            BenchmarkPlan.model_validate(plan.model_dump(mode="python") | {"measured_requests": 2})
+        )
+        RecordRepository(connection, Workload).update(
+            Workload.model_validate(workload.model_dump(mode="python") | {"request_count": 2})
+        )
+    finally:
+        connection.close()
+
+    class PerRequestOnlyFake(FakeEngineAdapter):
+        """Mimics Ollama: per-request server values, no aggregate metrics endpoint."""
+
+        def describe(self):
+            manifest = super().describe()
+            return manifest.model_copy(
+                update={
+                    "declared_capabilities": (manifest.declared_capabilities - {"native_metrics"})
+                    | {"server_reported_durations"},
+                    "native_metrics": ["ollama.eval_duration", "ollama.eval_count"],
+                }
+            )
+
+        def stream_request(self, request):
+            source = super().stream_request(request)
+
+            async def events():
+                async for event in source:
+                    if event.event_type is StreamEventType.USAGE:
+                        event = event.model_copy(
+                            update={
+                                "native_metrics": [
+                                    AdapterMetric(
+                                        metric_name="ollama.eval_duration",
+                                        value=500_000_000,
+                                        unit="ns",
+                                        source=MetricSource.ENGINE_NATIVE,
+                                    ),
+                                    AdapterMetric(
+                                        metric_name="ollama.eval_count",
+                                        value=5,
+                                        unit="tokens",
+                                        source=MetricSource.ENGINE_NATIVE,
+                                    ),
+                                ]
+                            }
+                        )
+                    yield event
+
+            return events()
+
+    catalog = AdapterCatalog()
+    catalog.register(PerRequestOnlyFake())
+    result = asyncio.run(
+        execute_run(
+            run_id=run.id,
+            database_path=database_path,
+            data_directory=tmp_path,
+            app_instance_id="test-app",
+            worker_id=run.worker_id or "",
+            catalog_factory=lambda: catalog,
+        )
+    )
+    assert result == 0
+
+    connection = open_database(database_path)
+    try:
+        metrics = MetricSampleRepository(connection).list_for_run(run.id)
+        counts = [
+            item
+            for item in metrics
+            if item.metric_name == "ollama.eval_count" and item.aggregation == "raw"
+        ]
+        assert len(counts) == 2
+        assert all(item.unit == "tokens" and item.value == 5 for item in counts)
+        assert all(item.formula == "reported integer token count" for item in counts)
+        assert all(
+            item.labels["phase"] == "measurement" and "request_id" in item.labels for item in counts
+        )
+        # Per-request values are not expected in before/after snapshots, so no placeholders.
+        assert not any("snapshot" in item.labels for item in metrics)
+        assert not any(item.aggregation == "delta" for item in metrics)
+        mean = next(
+            item
+            for item in metrics
+            if item.metric_name == "ollama.eval_duration" and item.aggregation == "mean"
+        )
+        assert mean.source is MetricSource.ENGINE_NATIVE
+        assert mean.value == 500_000_000
+        assert mean.sample_count == 2
+        rate = next(
+            item for item in metrics if item.metric_name == "ollama.eval_rate_tokens_per_second"
+        )
+        assert rate.value == pytest.approx(10.0)
+
+        # Simulate a run finalized before engine-native aggregates existed, then backfill.
+        connection.execute(
+            "DELETE FROM metric_samples WHERE run_id = ? AND ("
+            "(json_extract(payload_json, '$.source') = 'engine_native' "
+            "AND json_extract(payload_json, '$.aggregation') != 'raw') "
+            "OR metric_name = 'ollama.eval_rate_tokens_per_second')",
+            (str(run.id),),
+        )
+        connection.commit()
+        stripped = MetricSampleRepository(connection).list_for_run(run.id)
+        # Two native names x (mean, p50, p90, p95, p99) plus the decode rate.
+        assert backfill_engine_native_metrics_for_finalized_runs(connection) == 11
+        assert backfill_engine_native_metrics_for_finalized_runs(connection) == 0
+        restored = MetricSampleRepository(connection).list_for_run(run.id)
+        assert len(restored) == len(stripped) + 11
+        assert {item.id for item in stripped} <= {item.id for item in restored}
+        backfilled_rate = next(
+            item for item in restored if item.metric_name == "ollama.eval_rate_tokens_per_second"
+        )
+        assert backfilled_rate.value == pytest.approx(10.0)
+        assert backfilled_rate.labels == rate.labels
     finally:
         connection.close()
 

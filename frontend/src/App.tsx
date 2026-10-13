@@ -4,6 +4,7 @@ import { ApiStatus } from "./components/ApiStatus";
 import { ExperimentsScreen } from "./components/ExperimentsScreen";
 import { PlaygroundScreen } from "./components/PlaygroundScreen";
 import { RunsScreen } from "./components/RunsScreen";
+import { SettingsScreen } from "./components/SettingsScreen";
 import { WorkloadsScreen } from "./components/WorkloadsScreen";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
 
@@ -47,6 +48,11 @@ const navigation = [
     id: "learning",
     label: "Learning",
     description: "Explore inference concepts through measurable experiments.",
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    description: "Choose benchmark defaults, fixture visibility, and review local storage.",
   },
 ] as const;
 
@@ -152,6 +158,8 @@ export function App() {
             />
           ) : activeScreen === "experiments" ? (
             <ExperimentsScreen />
+          ) : activeScreen === "settings" ? (
+            <SettingsScreen />
           ) : (
             <SectionEmptyState />
           )}

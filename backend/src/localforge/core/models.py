@@ -155,6 +155,10 @@ class AcceleratorInfo(SchemaModel):
     memory_bytes: int | None = Field(default=None, ge=0)
     runtime: str | None = None
     driver_version: str | None = None
+    # None means the value could not be determined; it is never guessed.
+    integrated: bool | None = None
+    memory_kind: Literal["dedicated", "shared"] | None = None
+    detected_by: str | None = Field(default=None, max_length=80)
 
 
 class HardwareSnapshot(SchemaModel):
@@ -163,6 +167,7 @@ class HardwareSnapshot(SchemaModel):
     architecture: str | None = None
     cpu_model: str | None = None
     cpu_logical_cores: int | None = Field(default=None, ge=1)
+    cpu_physical_cores: int | None = Field(default=None, ge=1)
     memory_total_bytes: int | None = Field(default=None, ge=0)
     accelerators: list[AcceleratorInfo] | None = None
 

@@ -62,7 +62,59 @@ when both values are non-negative and the counter did not decrease. Resets, nega
 duplicate names, non-native source labels, missing snapshots, kind changes, and unit changes are
 flagged and do not produce a numeric delta.
 Native definitions can differ between engines, so native and client metrics must not be merged into
-one unlabeled series.
+one unlabeled series. Snapshot placeholders are expected only from adapters that declare the
+`native_metrics` capability (an aggregate metrics endpoint); adapters that only report per-request
+values, such as Ollama, do not produce before/after/delta placeholder rows.
+
+### Per-request engine-native observations
+
+Some engines return values with each response (for example Ollama's durations and token counts).
+Each value is stored as a raw `engine_native` record with a `request_id` label and the request
+`phase`. At finalization, the measurement-phase observations are summarized per metric name and unit
+(and per concurrency level, with the same labels as client metrics) using the same rules as client
+distributions: `mean` is the arithmetic mean and `p50`/`p90`/`p95`/`p99` use R-7 with the minimum
+counts below. These summaries keep `source = engine_native` because they summarize engine-reported
+values; `sample_count` is the number of requests that reported the value. Engines that report no
+per-request values gain no summary rows.
+
+Engine-reported token rates are computed by LOCALFORGE from engine values, so they use
+`source = derived` and `aggregation = run_rate`, and keep the engine prefix in their names:
+
+| Metric | Unit | Formula |
+|---|---|---|
+| `ollama.eval_rate_tokens_per_second` | tokens/s | `sum(ollama.eval_count) / (sum(ollama.eval_duration ns) / 1e9)` over measurement requests that reported both |
+| `ollama.prompt_eval_rate_tokens_per_second` | tokens/s | `sum(ollama.prompt_eval_count) / (sum(ollama.prompt_eval_duration ns) / 1e9)` over measurement requests that reported both |
+
+The rate is `null` with `incomplete_token_count_coverage` when a request reported the duration but
+no count, and `null` with `unavailable_zero_engine_duration` when the summed duration is zero. For
+runs recorded before per-request counts were stored, the count falls back to the request sample's
+`engine_exact` usage count (which Ollama populates from the same response fields) and the row is
+flagged `token_counts_from_engine_usage_record`. These rates are timed by the engine and exclude
+client, network, and streaming overhead, so they are reported separately from the client-timed
+throughput metrics. In particular, `prompt_processing_throughput_tokens_per_second` stays
+unavailable until an adapter exposes a prefill interval with a cross-engine definition; an
+engine-timed prefill rate is never substituted for it.
+
+Runs finalized before these summaries existed are backfilled when the API starts: for finalized
+runs with stored per-request engine-native records, missing summary rows are recomputed from the
+stored request samples and raw records with the same method and appended. Existing rows are never
+modified, and repeating the backfill adds nothing.
+
+## Comparing runs
+
+Run comparisons pair only run-level metrics whose name, unit, source, aggregation, definition,
+formula, method version, kind, and stable labels match across every selected run. Per-request
+records (any `request_id` label), `raw` and `sample` aggregations, and `system_observed` telemetry
+samples are never paired across runs; they are listed once per metric name under excluded metrics.
+Metrics with no value in any compared run are also listed as excluded rather than shown as empty
+rows. The "Shared metric sources and definitions" dimension compares the same run-level set.
+
+The hardware dimension compares a stable identity: OS name and version, architecture, CPU model,
+logical cores, total memory, and each accelerator's name and vendor must be known for every run,
+otherwise the dimension is unknown. Physical cores and accelerator memory, integrated/shared-memory
+flags, runtime, and driver version are compared when every run reports them; when only some runs
+report a field it is listed in `unverified_fields` instead. Detection provenance (`detected_by`)
+and observation timestamps are not part of the identity.
 
 ## Local resource samples
 

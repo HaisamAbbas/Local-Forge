@@ -5,6 +5,7 @@ import {
   ApiError,
   createBenchmarkPlan,
   createWorkload,
+  fetchWorkspaceSettings,
   importDataset,
   listBenchmarkPlans,
   listDatasets,
@@ -21,6 +22,7 @@ import {
   type EngineModel,
   type EngineProfile,
   type Workload,
+  type WorkspaceSettingsResponse,
 } from "../lib/api";
 import { WorkloadsScreen } from "./WorkloadsScreen";
 
@@ -31,6 +33,7 @@ vi.mock("../lib/api", async (importOriginal) => {
     createBenchmarkPlan: vi.fn(),
     createWorkload: vi.fn(),
     enableEngineProfile: vi.fn(),
+    fetchWorkspaceSettings: vi.fn(),
     importDataset: vi.fn(),
     listBenchmarkPlans: vi.fn(),
     listDatasets: vi.fn(),
@@ -154,7 +157,34 @@ const planResponse: BenchmarkPlanResponse = {
   preflight: preflight(),
 };
 
+function workspaceSettings(
+  overrides: Partial<WorkspaceSettingsResponse["settings"]> = {},
+  fixtureAdapterIds: string[] = ["localforge.fake"],
+): WorkspaceSettingsResponse {
+  const defaults = {
+    show_test_fixture_engines: false,
+    default_retain_prompt_output: false,
+    default_request_timeout_seconds: 120,
+    default_warmup_count: 2,
+  };
+  return {
+    settings: { ...defaults, ...overrides },
+    defaults,
+    saved: Object.keys(overrides).length > 0,
+    test_fixture_adapter_ids: fixtureAdapterIds,
+    storage: {
+      data_directory: "D:/LocalForgeData",
+      database_path: "D:/LocalForgeData/localforge.sqlite3",
+      free_bytes: 10 * 1024 ** 3,
+      total_bytes: 100 * 1024 ** 3,
+      low_space: false,
+      low_space_threshold_bytes: 1024 ** 3,
+    },
+  };
+}
+
 beforeEach(() => {
+  vi.mocked(fetchWorkspaceSettings).mockResolvedValue(workspaceSettings());
   vi.mocked(listEngineProfiles).mockResolvedValue([engine]);
   vi.mocked(listMachineProfiles).mockResolvedValue([]);
   vi.mocked(listDatasets).mockResolvedValue([]);
@@ -424,5 +454,42 @@ describe("workload builder and plan review", () => {
     await screen.findByText("run-1");
     expect(createBenchmarkPlan).not.toHaveBeenCalled();
     expect(startBenchmarkRun).toHaveBeenCalledWith("plan-1", false);
+  });
+
+  it("prefills warmup and retention from saved workspace settings", async () => {
+    vi.mocked(fetchWorkspaceSettings).mockResolvedValue(
+      workspaceSettings({ default_warmup_count: 5, default_retain_prompt_output: true }),
+    );
+    render(<WorkloadsScreen />);
+    await chooseReadyTarget();
+
+    await waitFor(() => expect(screen.getByLabelText("Warmup requests")).toHaveValue(5));
+    expect(screen.getByLabelText(/Retain prompt and generated output content/)).toBeChecked();
+  });
+
+  it("hides test fixture engines from new plans unless settings enable them", async () => {
+    const realEngine: EngineProfile = {
+      ...engine,
+      id: "engine-real",
+      label: "Local llama.cpp",
+      adapter_id: "localforge.llama_cpp",
+    };
+    vi.mocked(listEngineProfiles).mockResolvedValue([engine, realEngine]);
+    vi.mocked(fetchWorkspaceSettings).mockResolvedValue(workspaceSettings({}, ["fake"]));
+    render(<WorkloadsScreen />);
+
+    await waitFor(() => expect(screen.getByLabelText("Engine profile")).toHaveValue("engine-real"));
+    expect(screen.queryByRole("option", { name: /Local fixture/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Local llama\.cpp/ })).toBeInTheDocument();
+  });
+
+  it("keeps fixture engines selectable when settings enable them", async () => {
+    vi.mocked(fetchWorkspaceSettings).mockResolvedValue(
+      workspaceSettings({ show_test_fixture_engines: true }, ["fake"]),
+    );
+    render(<WorkloadsScreen />);
+    await chooseReadyTarget();
+
+    expect(screen.getByLabelText("Engine profile")).toHaveValue(engine.id);
   });
 });

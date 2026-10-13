@@ -22,6 +22,7 @@ from localforge.adapters.catalog import (
 )
 from localforge.adapters.contracts import (
     AdapterConfiguration,
+    AdapterManifest,
     AdapterMetric,
     GenerationRequest,
     MetricsResult,
@@ -436,6 +437,31 @@ def _adapter_config(engine: EngineProfile) -> AdapterConfiguration:
     )
 
 
+def _request_native_metric_description(unit: str) -> tuple[str, str]:
+    """Describe a per-request native observation without assuming every value is a duration."""
+
+    if unit == "tokens":
+        return (
+            "Ollama server-reported token count for an individual chat request.",
+            "reported integer token count",
+        )
+    if unit == "ns":
+        return (
+            "Ollama server-reported timing for an individual chat request.",
+            "reported value in nanoseconds",
+        )
+    return (
+        "Engine-reported native value for an individual request.",
+        f"reported value in {unit}",
+    )
+
+
+def _snapshot_metric_names(manifest: AdapterManifest) -> list[str]:
+    """Expected aggregate snapshot names; per-request-only adapters have no snapshot endpoint."""
+
+    return manifest.native_metrics if "native_metrics" in manifest.declared_capabilities else []
+
+
 async def _capture_native_metrics(
     *,
     connection: sqlite3.Connection,
@@ -484,7 +510,7 @@ async def _capture_native_metrics(
     evaluation = native_metric_snapshot_samples(
         run_id,
         result_metrics,
-        expected_names=manifest.native_metrics,
+        expected_names=_snapshot_metric_names(manifest),
         stage=stage,
         adapter_id=engine.adapter_id,
         adapter_version=engine.adapter_version,
@@ -722,6 +748,7 @@ async def _execute_request(
                     manifest = catalog.manifest_for(adapter_id)
                     metric_repository = MetricSampleRepository(connection)
                     for metric in event.native_metrics:
+                        definition, formula = _request_native_metric_description(metric.unit)
                         metric_repository.create(
                             MetricSample(
                                 run_id=run_id,
@@ -731,10 +758,8 @@ async def _execute_request(
                                 source=metric.source,
                                 aggregation="raw",
                                 sample_count=1,
-                                definition=(
-                                    "Ollama server-reported timing for an individual chat request."
-                                ),
-                                formula="reported value in nanoseconds",
+                                definition=definition,
+                                formula=formula,
                                 method_version="ollama.api.chat.v1",
                                 metric_kind=metric.kind,
                                 adapter_id=manifest.adapter_id,
@@ -1265,7 +1290,7 @@ async def execute_run(
                 run_id,
                 native_before,
                 native_after,
-                expected_names=catalog.manifest_for(engine.adapter_id).native_metrics,
+                expected_names=_snapshot_metric_names(catalog.manifest_for(engine.adapter_id)),
                 adapter_id=engine.adapter_id,
                 adapter_version=engine.adapter_version,
                 engine_version=engine.engine_version,
