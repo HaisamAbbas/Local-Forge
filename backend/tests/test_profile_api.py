@@ -1,7 +1,10 @@
 """Machine and engine profile API behavior, privacy, and local-origin protection."""
 
 import asyncio
+import os
+import stat
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -14,8 +17,12 @@ from localforge.adapters.fake import (
     FakeEngineAdapter,
     FakeEngineScenario,
 )
+from localforge.adapters.llama_cpp import LLAMA_CPP_ADAPTER_ID, LlamaCppEngineAdapter
 from localforge.api.dependencies import engine_profile_mutation_lock
 from localforge.api.main import AppSettings, create_app
+from localforge.core.models import EngineProfile, EngineProfileStatus
+from localforge.storage.database import open_database
+from localforge.storage.repositories import RecordRepository
 
 
 def _client(tmp_path, scenario: FakeEngineScenario | None = None):
@@ -376,6 +383,178 @@ def test_managed_profile_start_and_stop_only_use_recorded_adapter_handle(tmp_pat
         assert stopped.json()["status"] == "disabled"
         assert UUID(profile_id) not in app.state.engine_process_handles
         assert client.delete(f"/api/v1/engines/{profile_id}").status_code == 204
+
+
+def test_llama_managed_routes_forward_saved_endpoint_and_extension_configuration(tmp_path) -> None:
+    class OwnedTestProcess:
+        def __init__(self) -> None:
+            self.pid = 62431
+            self.returncode = None
+            self.terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = 0
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            return self.returncode or 0
+
+    async def run_test() -> None:
+        executable = tmp_path / "llama-server.exe"
+        model = tmp_path / "model with spaces.gguf"
+        executable.write_bytes(b"test process fixture")
+        if os.name != "nt":
+            executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+        model.write_bytes(b"test model fixture; never passed to a real server")
+        adapter = LlamaCppEngineAdapter()
+        processes: list[OwnedTestProcess] = []
+        captured: dict[str, object] = {}
+
+        async def spawn(arguments: list[str], working_directory: Path) -> OwnedTestProcess:
+            process = OwnedTestProcess()
+            processes.append(process)
+            captured["arguments"] = arguments
+            captured["working_directory"] = working_directory
+            return process
+
+        async def ready(_process: object, _port: int, _timeout: float) -> bool:
+            return True
+
+        adapter._spawn = spawn  # type: ignore[method-assign]
+        adapter._port_available = lambda _port: True  # type: ignore[method-assign]
+        adapter._wait_until_ready = ready  # type: ignore[method-assign]
+
+        catalogs: list[AdapterCatalog] = []
+
+        def catalog_factory() -> AdapterCatalog:
+            catalog = AdapterCatalog()
+            catalog.register(adapter)
+            catalogs.append(catalog)
+            return catalog
+
+        app = create_app(
+            AppSettings(
+                data_directory=tmp_path / "data",
+                adapter_catalog_factory=catalog_factory,
+                session_token_factory=lambda: "test-local-session-token",
+            )
+        )
+        client = TestClient(app, base_url="http://127.0.0.1")
+        with client:
+            _authorize_mutations(client)
+            created = client.post(
+                "/api/v1/engines",
+                json={
+                    "label": "Managed llama",
+                    "adapter_id": LLAMA_CPP_ADAPTER_ID,
+                    "integration_mode": "managed_process",
+                    "endpoint_url": "http://127.0.0.1:9931",
+                    "engine_extensions": {
+                        "llama_cpp": {
+                            "executable_path": str(executable),
+                            "model_path": str(model),
+                            "working_directory": str(tmp_path),
+                            "startup_timeout_seconds": 1,
+                            "context_size": 4096,
+                            "parallelism": 2,
+                            "gpu_layers": "all",
+                        }
+                    },
+                },
+            )
+            assert created.status_code == 201, created.text
+            profile_id = created.json()["id"]
+            assert created.json()["managed_process_running"] is False
+
+            blocked_probe = client.post(f"/api/v1/engines/{profile_id}/probe", json={})
+            assert blocked_probe.status_code == 409
+            assert blocked_probe.json()["detail"]["code"] == "managed_process_not_running"
+            blocked_enable = client.post(f"/api/v1/engines/{profile_id}/enable")
+            assert blocked_enable.status_code == 409
+            assert blocked_enable.json()["detail"]["code"] == "managed_process_not_running"
+
+            started = client.post(f"/api/v1/engines/{profile_id}/start")
+            assert started.status_code == 200, started.text
+            assert started.json()["managed_process_running"] is True
+            assert started.json()["status"] == "enabled"
+            assert captured["working_directory"] == tmp_path
+            arguments = captured["arguments"]
+            assert isinstance(arguments, list)
+            assert arguments[arguments.index("--model") + 1] == str(model)
+            assert arguments[arguments.index("--ctx-size") + 1] == "4096"
+            assert arguments[arguments.index("--parallel") + 1] == "2"
+            assert arguments[arguments.index("--gpu-layers") + 1] == "all"
+            assert client.get("/api/v1/engines").json()[0]["managed_process_running"] is True
+
+            stopped = client.post(f"/api/v1/engines/{profile_id}/stop")
+            assert stopped.status_code == 200, stopped.text
+            assert stopped.json()["managed_process_running"] is False
+            assert stopped.json()["status"] == "disabled"
+
+            second_profile = client.post(
+                "/api/v1/engines",
+                json={
+                    "label": "Managed llama shutdown",
+                    "adapter_id": LLAMA_CPP_ADAPTER_ID,
+                    "integration_mode": "managed_process",
+                    "endpoint_url": "http://127.0.0.1:9932",
+                    "engine_extensions": {
+                        "llama_cpp": {
+                            "executable_path": str(executable),
+                            "model_path": str(model),
+                            "working_directory": str(tmp_path),
+                            "startup_timeout_seconds": 1,
+                        }
+                    },
+                },
+            )
+            assert second_profile.status_code == 201, second_profile.text
+            adapter._port_available = lambda _port: False  # type: ignore[method-assign]
+            port_conflict = client.post(f"/api/v1/engines/{second_profile.json()['id']}/start")
+            assert port_conflict.status_code == 409
+            assert "port is already in use" in port_conflict.json()["detail"]["message"]
+            adapter._port_available = lambda _port: True  # type: ignore[method-assign]
+            assert (
+                client.post(f"/api/v1/engines/{second_profile.json()['id']}/start").status_code
+                == 200
+            )
+            assert not processes[-1].terminated
+
+        assert len(catalogs) == 1
+        assert processes[0].terminated
+        assert processes[1].terminated
+
+    asyncio.run(run_test())
+
+
+def test_startup_disables_managed_profile_without_an_owned_process(tmp_path) -> None:
+    first_client, first_app, _, _ = _client(tmp_path)
+    with first_client:
+        _authorize_mutations(first_client)
+        profile = _create_profile(first_client, integration_mode="managed_process")
+
+    connection = open_database(first_app.state.database_path)
+    try:
+        repository = RecordRepository(connection, EngineProfile)
+        saved = repository.get(UUID(profile["id"]))
+        assert saved is not None
+        repository.update(
+            EngineProfile.model_validate(
+                saved.model_dump(mode="python") | {"status": EngineProfileStatus.ENABLED}
+            )
+        )
+    finally:
+        connection.close()
+
+    second_client, _, _, _ = _client(tmp_path)
+    with second_client:
+        recovered = second_client.get(f"/api/v1/engines/{profile['id']}")
+        assert recovered.status_code == 200
+        assert recovered.json()["status"] == "disabled"
+        assert recovered.json()["managed_process_running"] is False
 
 
 def test_machine_profile_in_use_cannot_be_deleted(tmp_path) -> None:

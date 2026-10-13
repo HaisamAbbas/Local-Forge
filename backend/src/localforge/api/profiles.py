@@ -74,7 +74,10 @@ def _get_machine_profile(connection: sqlite3.Connection, profile_id: UUID) -> Ma
 
 
 def _engine_profile_view(
-    connection: sqlite3.Connection, profile: EngineProfile
+    connection: sqlite3.Connection,
+    profile: EngineProfile,
+    *,
+    managed_process_running: bool = False,
 ) -> EngineProfileView:
     capabilities = None
     if profile.capability_snapshot_id is not None:
@@ -91,6 +94,7 @@ def _engine_profile_view(
         adapter_version=profile.adapter_version,
         integration_mode=profile.integration_mode,
         status=profile.status,
+        managed_process_running=managed_process_running,
         endpoint_url=profile.endpoint_url,
         is_remote=endpoint_is_remote(profile.endpoint_url),
         remote_access_enabled=profile.remote_access_enabled,
@@ -107,6 +111,23 @@ def _engine_profile_view(
         created_at=profile.created_at,
         updated_at=profile.updated_at,
         schema_version=profile.schema_version,
+    )
+
+
+def _profile_adapter_configuration(profile: EngineProfile) -> AdapterConfiguration:
+    values = dict(profile.config)
+    if profile.endpoint_url is not None:
+        values["endpoint_url"] = profile.endpoint_url
+    if profile.health_route is not None:
+        values["health_route"] = profile.health_route
+    if profile.models_route is not None:
+        values["models_route"] = profile.models_route
+    if profile.engine_extensions:
+        values["engine_extensions"] = cast(JsonValue, profile.engine_extensions)
+    return AdapterConfiguration(
+        integration_mode=profile.integration_mode,
+        values=values,
+        secret_refs=profile.secret_refs,
     )
 
 
@@ -325,10 +346,21 @@ def delete_machine_profile(
 
 @router.get("/engines", response_model=list[EngineProfileView], tags=["engines"])
 def list_engine_profiles(
+    request: Request,
     connection: DatabaseConnection,
 ) -> list[EngineProfileView]:
     profiles = RecordRepository(connection, EngineProfile).list()
-    return [_engine_profile_view(connection, profile) for profile in profiles]
+    process_handles = cast(
+        dict[UUID, AdapterProcessHandle], request.app.state.engine_process_handles
+    )
+    return [
+        _engine_profile_view(
+            connection,
+            profile,
+            managed_process_running=profile.id in process_handles,
+        )
+        for profile in profiles
+    ]
 
 
 @router.post("/engines", response_model=EngineProfileView, status_code=201, tags=["engines"])
@@ -378,9 +410,18 @@ def create_engine_profile(
 @router.get("/engines/{profile_id}", response_model=EngineProfileView, tags=["engines"])
 def get_engine_profile(
     profile_id: UUID,
+    request: Request,
     connection: DatabaseConnection,
 ) -> EngineProfileView:
-    return _engine_profile_view(connection, _get_engine_profile(connection, profile_id))
+    profile = _get_engine_profile(connection, profile_id)
+    process_handles = cast(
+        dict[UUID, AdapterProcessHandle], request.app.state.engine_process_handles
+    )
+    return _engine_profile_view(
+        connection,
+        profile,
+        managed_process_running=profile.id in process_handles,
+    )
 
 
 @router.patch("/engines/{profile_id}", response_model=EngineProfileView, tags=["engines"])
@@ -464,6 +505,7 @@ def list_engine_models(
 async def probe_engine_profile(
     profile_id: UUID,
     body: ProbeRequest,
+    request: Request,
     catalog: LocalAdapterCatalog,
     connection: DatabaseConnection,
     _profile_lock: EngineProfileMutationLock,
@@ -475,6 +517,19 @@ async def probe_engine_profile(
             422,
             "integration_mode_unsupported",
             "The selected adapter does not support this integration mode.",
+        )
+
+    process_handles = cast(
+        dict[UUID, AdapterProcessHandle], request.app.state.engine_process_handles
+    )
+    if (
+        profile.integration_mode is EngineIntegrationMode.MANAGED_PROCESS
+        and profile_id not in process_handles
+    ):
+        raise _http_error(
+            409,
+            "managed_process_not_running",
+            "Start the managed server before probing its endpoint.",
         )
 
     is_remote = endpoint_is_remote(profile.endpoint_url)
@@ -497,21 +552,8 @@ async def probe_engine_profile(
             )
         )
 
-    values = dict(profile.config)
     # Engine identity is profile metadata; model names come from adapter inventory.
-    if profile.endpoint_url is not None:
-        values["endpoint_url"] = profile.endpoint_url
-    if profile.health_route is not None:
-        values["health_route"] = profile.health_route
-    if profile.models_route is not None:
-        values["models_route"] = profile.models_route
-    if profile.engine_extensions:
-        values["engine_extensions"] = cast(JsonValue, profile.engine_extensions)
-    config = AdapterConfiguration(
-        integration_mode=profile.integration_mode,
-        values=values,
-        secret_refs=profile.secret_refs,
-    )
+    config = _profile_adapter_configuration(profile)
     validation = await catalog.validate_config(profile.adapter_id, config)
     if not validation.valid:
         raise _http_error(
@@ -558,16 +600,36 @@ async def probe_engine_profile(
         }
     )
     saved = RecordRepository(connection, EngineProfile).update(profile)
-    return EngineProbeResponse(profile=_engine_profile_view(connection, saved), result=result)
+    return EngineProbeResponse(
+        profile=_engine_profile_view(
+            connection,
+            saved,
+            managed_process_running=profile.id in process_handles,
+        ),
+        result=result,
+    )
 
 
 @router.post("/engines/{profile_id}/enable", response_model=EngineProfileView, tags=["engines"])
 def enable_engine_profile(
     profile_id: UUID,
+    request: Request,
     connection: DatabaseConnection,
     _profile_lock: EngineProfileMutationLock,
 ) -> EngineProfileView:
     profile = _get_engine_profile(connection, profile_id)
+    process_handles = cast(
+        dict[UUID, AdapterProcessHandle], request.app.state.engine_process_handles
+    )
+    if (
+        profile.integration_mode is EngineIntegrationMode.MANAGED_PROCESS
+        and profile_id not in process_handles
+    ):
+        raise _http_error(
+            409,
+            "managed_process_not_running",
+            "Start the managed server before enabling its profile.",
+        )
     if profile.last_probed_at is None:
         raise _http_error(409, "engine_probe_required", "Probe this profile before enabling it.")
     if profile.status is EngineProfileStatus.NEEDS_ATTENTION:
@@ -576,7 +638,11 @@ def enable_engine_profile(
         profile.model_dump(mode="python") | {"status": EngineProfileStatus.ENABLED}
     )
     saved = RecordRepository(connection, EngineProfile).update(enabled)
-    return _engine_profile_view(connection, saved)
+    return _engine_profile_view(
+        connection,
+        saved,
+        managed_process_running=profile.id in process_handles,
+    )
 
 
 @router.post("/engines/{profile_id}/disable", response_model=EngineProfileView, tags=["engines"])
@@ -598,7 +664,7 @@ def disable_engine_profile(
         profile.model_dump(mode="python") | {"status": EngineProfileStatus.DISABLED}
     )
     saved = RecordRepository(connection, EngineProfile).update(disabled)
-    return _engine_profile_view(connection, saved)
+    return _engine_profile_view(connection, saved, managed_process_running=False)
 
 
 @router.post("/engines/{profile_id}/start", response_model=EngineProfileView, tags=["engines"])
@@ -623,13 +689,32 @@ async def start_engine_profile(
         raise _http_error(
             409, "engine_already_started", "LOCALFORGE already owns a process for this profile."
         )
-    config = AdapterConfiguration(
-        integration_mode=profile.integration_mode,
-        values=profile.config,
-        secret_refs=profile.secret_refs,
-    )
+    config = _profile_adapter_configuration(profile)
     try:
         handle = await catalog.start(profile.adapter_id, config)
+    except TimeoutError as error:
+        raise _http_error(
+            409,
+            "managed_start_timeout",
+            "The server did not become healthy before the startup timeout. Check the selected "
+            "binary, model, and server settings.",
+        ) from error
+    except ValueError as error:
+        raise _http_error(
+            409,
+            "managed_start_invalid",
+            "The adapter rejected the saved launch settings. Check the selected binary, model, "
+            "working directory, endpoint, and tuning values.",
+        ) from error
+    except OSError as error:
+        message = (
+            "The selected loopback port is already in use. Choose another port or stop the "
+            "service using it."
+            if "already in use" in str(error).casefold()
+            else "LOCALFORGE could not launch the selected binary. Check its permissions and "
+            "platform compatibility."
+        )
+        raise _http_error(409, "managed_start_unavailable", message) from error
     except Exception as error:
         raise _http_error(
             409,
@@ -642,7 +727,7 @@ async def start_engine_profile(
         profile.model_dump(mode="python") | {"status": EngineProfileStatus.ENABLED}
     )
     saved = RecordRepository(connection, EngineProfile).update(started)
-    return _engine_profile_view(connection, saved)
+    return _engine_profile_view(connection, saved, managed_process_running=True)
 
 
 @router.post("/engines/{profile_id}/stop", response_model=EngineProfileView, tags=["engines"])
@@ -675,7 +760,7 @@ async def stop_engine_profile(
         profile.model_dump(mode="python") | {"status": EngineProfileStatus.DISABLED}
     )
     saved = RecordRepository(connection, EngineProfile).update(stopped)
-    return _engine_profile_view(connection, saved)
+    return _engine_profile_view(connection, saved, managed_process_running=False)
 
 
 @router.delete("/engines/{profile_id}", status_code=204, tags=["engines"])

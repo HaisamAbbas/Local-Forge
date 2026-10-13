@@ -22,6 +22,8 @@ import {
   listRuns,
   probeEngineProfile,
   saveCurrentMachineProfile,
+  startEngineProfile,
+  stopEngineProfile,
   updateEngineProfile,
   type AdapterManifest,
   type AdapterModel,
@@ -598,6 +600,15 @@ type EngineFormValues = {
   models_route: string;
   model_id: string;
   timeout_seconds: string;
+  startup_timeout_seconds: string;
+  executable_path: string;
+  model_path: string;
+  working_directory: string;
+  context_size: string;
+  parallelism: string;
+  batch_size: string;
+  ubatch_size: string;
+  gpu_layers: string;
   max_retries: string;
   retry_backoff_seconds: string;
   streaming_mode: "auto" | "required" | "disabled";
@@ -617,6 +628,15 @@ const blankEngineForm: EngineFormValues = {
   models_route: "",
   model_id: "",
   timeout_seconds: "30",
+  startup_timeout_seconds: "120",
+  executable_path: "",
+  model_path: "",
+  working_directory: "",
+  context_size: "",
+  parallelism: "",
+  batch_size: "",
+  ubatch_size: "",
+  gpu_layers: "",
   max_retries: "0",
   retry_backoff_seconds: "0.25",
   streaming_mode: "auto",
@@ -643,7 +663,9 @@ function EngineProfileDialog({
   onSubmit: (input: EngineProfileInput) => void;
 }) {
   const isOpenAiCompatible = manifest.adapter_id === "localforge.openai_compatible";
-  const savedExtension = initial?.engine_extensions?.openai_compatible ?? {};
+  const isLlamaCpp = manifest.adapter_id === "localforge.llama_cpp";
+  const extensionNamespace = isLlamaCpp ? "llama_cpp" : "openai_compatible";
+  const savedExtension = initial?.engine_extensions?.[extensionNamespace] ?? {};
   const savedString = (key: string, fallback: string) => {
     const value = savedExtension[key];
     return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
@@ -659,6 +681,15 @@ function EngineProfileDialog({
           models_route: "",
           model_id: savedString("model_id", ""),
           timeout_seconds: savedString("timeout_seconds", "30"),
+          startup_timeout_seconds: savedString("startup_timeout_seconds", "120"),
+          executable_path: savedString("executable_path", ""),
+          model_path: savedString("model_path", ""),
+          working_directory: savedString("working_directory", ""),
+          context_size: savedString("context_size", ""),
+          parallelism: savedString("parallelism", ""),
+          batch_size: savedString("batch_size", ""),
+          ubatch_size: savedString("ubatch_size", ""),
+          gpu_layers: savedString("gpu_layers", ""),
           max_retries: savedString("max_retries", "0"),
           retry_backoff_seconds: savedString("retry_backoff_seconds", "0.25"),
           streaming_mode:
@@ -725,6 +756,90 @@ function EngineProfileDialog({
         return;
       }
     }
+    if (isLlamaCpp) {
+      const timeout = Number(values.timeout_seconds);
+      const startupTimeout = Number(values.startup_timeout_seconds);
+      if (!values.endpoint_url.trim()) {
+        setFormError("Enter the local llama-server endpoint URL.");
+        return;
+      }
+      if (!Number.isFinite(timeout) || timeout < 0.1 || timeout > 300) {
+        setFormError("Request timeout must be between 0.1 and 300 seconds.");
+        return;
+      }
+      if (
+        values.integration_mode === "managed_process" &&
+        (!Number.isFinite(startupTimeout) || startupTimeout < 0.1 || startupTimeout > 300)
+      ) {
+        setFormError("Startup timeout must be between 0.1 and 300 seconds.");
+        return;
+      }
+      if (values.integration_mode === "managed_process") {
+        if (
+          !values.executable_path.trim() ||
+          !values.model_path.trim() ||
+          !values.working_directory.trim()
+        ) {
+          setFormError(
+            "Managed mode needs an executable, a GGUF model file, and a working directory.",
+          );
+          return;
+        }
+        if (!values.model_path.trim().toLowerCase().endsWith(".gguf")) {
+          setFormError("Choose a local model file with the .gguf extension.");
+          return;
+        }
+        for (const [label, value] of [
+          ["Context size", values.context_size],
+          ["Parallelism", values.parallelism],
+          ["Batch size", values.batch_size],
+          ["Physical batch size", values.ubatch_size],
+        ] as const) {
+          if (value.trim() && (!Number.isInteger(Number(value)) || Number(value) < 1)) {
+            setFormError(`${label} must be a positive whole number.`);
+            return;
+          }
+        }
+        if (values.gpu_layers.trim()) {
+          const normalizedGpuLayers = values.gpu_layers.trim().toLowerCase();
+          const numericGpuLayers = Number(normalizedGpuLayers);
+          if (
+            normalizedGpuLayers !== "auto" &&
+            normalizedGpuLayers !== "all" &&
+            (!Number.isInteger(numericGpuLayers) ||
+              numericGpuLayers < 0 ||
+              numericGpuLayers > 100_000)
+          ) {
+            setFormError("GPU layers must be a whole number from 0 to 100000, auto, or all.");
+            return;
+          }
+        }
+        if (
+          values.batch_size.trim() &&
+          values.ubatch_size.trim() &&
+          Number(values.ubatch_size) > Number(values.batch_size)
+        ) {
+          setFormError("Physical batch size cannot exceed logical batch size.");
+          return;
+        }
+        try {
+          const managedEndpoint = new URL(values.endpoint_url.trim());
+          if (
+            managedEndpoint.protocol !== "http:" ||
+            managedEndpoint.hostname !== "127.0.0.1" ||
+            managedEndpoint.search !== "" ||
+            managedEndpoint.hash !== "" ||
+            !["", "/", "/v1"].includes(managedEndpoint.pathname.replace(/\/$/, ""))
+          ) {
+            setFormError("Managed mode must use an HTTP 127.0.0.1 URL at the root.");
+            return;
+          }
+        } catch {
+          setFormError("Enter a valid local HTTP endpoint URL for managed mode.");
+          return;
+        }
+      }
+    }
     setFormError("");
     const input: EngineProfileInput = {
       label: values.label.trim(),
@@ -734,9 +849,9 @@ function EngineProfileDialog({
       endpoint_url: values.endpoint_url.trim() || null,
       user_notes: values.user_notes.trim() || null,
     };
-    if (!initial || values.health_route.trim())
+    if (!isLlamaCpp && (!initial || values.health_route.trim()))
       input.health_route = values.health_route.trim() || null;
-    if (!initial || values.models_route.trim())
+    if (!isLlamaCpp && (!initial || values.models_route.trim()))
       input.models_route = values.models_route.trim() || null;
     if (isOpenAiCompatible) {
       const extension: Record<string, unknown> = { ...savedExtension };
@@ -758,6 +873,33 @@ function EngineProfileDialog({
       } else if (values.clear_credential) {
         input.secret_refs = {};
       }
+    }
+    if (isLlamaCpp) {
+      const extension: Record<string, unknown> = {
+        timeout_seconds: Number(values.timeout_seconds),
+      };
+      if (values.model_id.trim()) extension.model_id = values.model_id.trim();
+      if (values.integration_mode === "managed_process") {
+        extension.executable_path = values.executable_path.trim();
+        extension.model_path = values.model_path.trim();
+        extension.working_directory = values.working_directory.trim();
+        extension.startup_timeout_seconds = Number(values.startup_timeout_seconds);
+        for (const key of ["context_size", "parallelism", "batch_size", "ubatch_size"] as const) {
+          const value = values[key].trim();
+          if (value) extension[key] = Number(value);
+        }
+        const gpuLayers = values.gpu_layers.trim();
+        if (gpuLayers) {
+          const normalizedGpuLayers = gpuLayers.toLowerCase();
+          extension.gpu_layers = ["auto", "all"].includes(normalizedGpuLayers)
+            ? normalizedGpuLayers
+            : Number(normalizedGpuLayers);
+        }
+      }
+      input.engine_extensions = {
+        ...(initial?.engine_extensions ?? {}),
+        llama_cpp: extension,
+      };
     }
     onSubmit(input);
   };
@@ -817,16 +959,26 @@ function EngineProfileDialog({
             </select>
           </label>
           <label>
-            {isOpenAiCompatible ? "API base URL" : "Endpoint URL"}{" "}
-            {!isOpenAiCompatible && <span className="optional-label">Optional</span>}
+            {isOpenAiCompatible
+              ? "API base URL"
+              : isLlamaCpp && values.integration_mode === "managed_process"
+                ? "Local bind URL"
+                : isLlamaCpp
+                  ? "llama-server endpoint URL"
+                  : "Endpoint URL"}{" "}
+            {!isOpenAiCompatible && !isLlamaCpp && <span className="optional-label">Optional</span>}
             <input
               autoComplete="url"
               maxLength={1000}
               onChange={(event) => setField("endpoint_url", event.target.value)}
               placeholder={
-                isOpenAiCompatible ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:8000"
+                isOpenAiCompatible
+                  ? "http://127.0.0.1:8000/v1"
+                  : isLlamaCpp
+                    ? "http://127.0.0.1:9931"
+                    : "http://127.0.0.1:8000"
               }
-              required={isOpenAiCompatible}
+              required={isOpenAiCompatible || isLlamaCpp}
               type="url"
               value={values.endpoint_url}
             />
@@ -839,6 +991,125 @@ function EngineProfileDialog({
               value={values.engine_display_name}
             />
           </label>
+          {isLlamaCpp && (
+            <>
+              <p className="notice">
+                GGUF model files stay on this machine. LocalForge never downloads or uploads them.
+                GPU acceleration depends on the backend compiled into your selected llama-server
+                binary.
+              </p>
+              <label>
+                Model ID{" "}
+                <span className="optional-label">Optional if the server lists a model</span>
+                <input
+                  maxLength={500}
+                  onChange={(event) => setField("model_id", event.target.value)}
+                  placeholder="Model ID reported by llama-server"
+                  value={values.model_id}
+                />
+              </label>
+              <label>
+                Request timeout (seconds)
+                <input
+                  max={300}
+                  min={0.1}
+                  onChange={(event) => setField("timeout_seconds", event.target.value)}
+                  step="any"
+                  type="number"
+                  value={values.timeout_seconds}
+                />
+              </label>
+              {values.integration_mode === "managed_process" && (
+                <details className="advanced-fields" open>
+                  <summary>Local launch settings</summary>
+                  <p className="helper-copy">
+                    Use absolute paths. LocalForge starts only this selected executable and stops
+                    only the process it launched. GGUF files must already be present.
+                  </p>
+                  <label>
+                    llama-server executable path
+                    <input
+                      autoComplete="off"
+                      maxLength={1000}
+                      onChange={(event) => setField("executable_path", event.target.value)}
+                      placeholder="C:\\llama.cpp\\llama-server.exe"
+                      required
+                      value={values.executable_path}
+                    />
+                  </label>
+                  <label>
+                    Existing GGUF model path
+                    <input
+                      autoComplete="off"
+                      maxLength={1000}
+                      onChange={(event) => setField("model_path", event.target.value)}
+                      placeholder="C:\\Models\\model.gguf"
+                      required
+                      value={values.model_path}
+                    />
+                  </label>
+                  <label>
+                    Working directory
+                    <input
+                      autoComplete="off"
+                      maxLength={1000}
+                      onChange={(event) => setField("working_directory", event.target.value)}
+                      placeholder="C:\\llama.cpp\\build\\bin"
+                      required
+                      value={values.working_directory}
+                    />
+                  </label>
+                  <label>
+                    Startup timeout (seconds)
+                    <input
+                      max={300}
+                      min={0.1}
+                      onChange={(event) => setField("startup_timeout_seconds", event.target.value)}
+                      step="any"
+                      type="number"
+                      value={values.startup_timeout_seconds}
+                    />
+                  </label>
+                  <details className="advanced-fields">
+                    <summary>Optional server tuning</summary>
+                    <p className="helper-copy">
+                      Settings are passed to llama-server as documented command-line arguments.
+                      Hardware compatibility is determined by your binary and model.
+                    </p>
+                    {(
+                      [
+                        ["context_size", "Context size", "4096"],
+                        ["parallelism", "Parallel requests", "1"],
+                        ["batch_size", "Batch size", "2048"],
+                        ["ubatch_size", "Physical batch size", "512"],
+                      ] as const
+                    ).map(([key, label, placeholder]) => (
+                      <label key={key}>
+                        {label} <span className="optional-label">Optional</span>
+                        <input
+                          min={1}
+                          onChange={(event) => setField(key, event.target.value)}
+                          placeholder={placeholder}
+                          step={1}
+                          type="number"
+                          value={values[key]}
+                        />
+                      </label>
+                    ))}
+                    <label>
+                      GPU layers <span className="optional-label">Optional</span>
+                      <input
+                        maxLength={16}
+                        onChange={(event) => setField("gpu_layers", event.target.value)}
+                        placeholder="0, auto, or all"
+                        value={values.gpu_layers}
+                      />
+                    </label>
+                  </details>
+                </details>
+              )}
+            </>
+          )}
           {isOpenAiCompatible && (
             <>
               <label>
@@ -951,24 +1222,28 @@ function EngineProfileDialog({
           )}
           <details className="advanced-fields">
             <summary>Connection details</summary>
-            <label>
-              Health route <span className="optional-label">Optional</span>
-              <input
-                maxLength={500}
-                onChange={(event) => setField("health_route", event.target.value)}
-                placeholder="/health"
-                value={values.health_route}
-              />
-            </label>
-            <label>
-              Models route <span className="optional-label">Optional</span>
-              <input
-                maxLength={500}
-                onChange={(event) => setField("models_route", event.target.value)}
-                placeholder="/v1/models"
-                value={values.models_route}
-              />
-            </label>
+            {!isLlamaCpp && (
+              <>
+                <label>
+                  Health route <span className="optional-label">Optional</span>
+                  <input
+                    maxLength={500}
+                    onChange={(event) => setField("health_route", event.target.value)}
+                    placeholder="/health"
+                    value={values.health_route}
+                  />
+                </label>
+                <label>
+                  Models route <span className="optional-label">Optional</span>
+                  <input
+                    maxLength={500}
+                    onChange={(event) => setField("models_route", event.target.value)}
+                    placeholder="/v1/models"
+                    value={values.models_route}
+                  />
+                </label>
+              </>
+            )}
             <label>
               Notes <span className="optional-label">Optional</span>
               <textarea
@@ -1349,6 +1624,22 @@ export function EnginesScreen() {
     }
   };
 
+  const toggleManagedProcess = async (profile: EngineProfile) => {
+    setBusyProfile(profile.id);
+    setActionError("");
+    try {
+      if (profile.managed_process_running) await stopEngineProfile(profile.id);
+      else await startEngineProfile(profile.id);
+      await profiles.reload();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Could not change this engine process state.",
+      );
+    } finally {
+      setBusyProfile(null);
+    }
+  };
+
   const inspect = async (id: string) => {
     setExpanded((current) => ({ ...current, [id]: !current[id] }));
     if (modelData[id] && !modelData[id].error) return;
@@ -1572,12 +1863,40 @@ export function EnginesScreen() {
                             </p>
                           </div>
                           <div className="engine-actions">
+                            {profile.integration_mode === "managed_process" && (
+                              <button
+                                className={
+                                  profile.managed_process_running
+                                    ? "button button--danger-quiet"
+                                    : "button button--primary"
+                                }
+                                disabled={!manifest || busyProfile === profile.id}
+                                onClick={() => void toggleManagedProcess(profile)}
+                                type="button"
+                              >
+                                {busyProfile === profile.id
+                                  ? profile.managed_process_running
+                                    ? "Stopping…"
+                                    : "Starting…"
+                                  : profile.managed_process_running
+                                    ? "Stop server"
+                                    : "Start server"}
+                              </button>
+                            )}
                             <button
                               className="button button--quiet"
-                              disabled={!manifest || busyProfile === profile.id}
+                              disabled={
+                                !manifest ||
+                                busyProfile === profile.id ||
+                                (profile.integration_mode === "managed_process" &&
+                                  !profile.managed_process_running)
+                              }
                               title={
                                 manifest
-                                  ? undefined
+                                  ? profile.integration_mode === "managed_process" &&
+                                    !profile.managed_process_running
+                                    ? "Start the local server before probing it."
+                                    : undefined
                                   : "This adapter is not installed. Reinstall it to probe this profile."
                               }
                               onClick={() => void probe(profile.id)}
@@ -1587,6 +1906,10 @@ export function EnginesScreen() {
                             </button>
                             <button
                               className="button button--quiet"
+                              disabled={
+                                profile.integration_mode === "managed_process" &&
+                                !profile.managed_process_running
+                              }
                               onClick={() => void inspect(profile.id)}
                               type="button"
                             >
@@ -1594,7 +1917,11 @@ export function EnginesScreen() {
                             </button>
                             <button
                               className="button button--quiet"
-                              disabled={!manifest || busyProfile === profile.id}
+                              disabled={
+                                !manifest ||
+                                busyProfile === profile.id ||
+                                profile.managed_process_running
+                              }
                               title={
                                 manifest
                                   ? undefined
@@ -1610,7 +1937,9 @@ export function EnginesScreen() {
                             </button>
                             <button
                               className="button button--danger-quiet"
-                              disabled={busyProfile === profile.id}
+                              disabled={
+                                busyProfile === profile.id || profile.managed_process_running
+                              }
                               onClick={() => setRemovePrompt(profile)}
                               type="button"
                             >

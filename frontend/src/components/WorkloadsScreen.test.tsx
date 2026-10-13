@@ -53,6 +53,7 @@ const engine: EngineProfile = {
   adapter_version: "1.0.0",
   integration_mode: "attached_endpoint",
   status: "enabled",
+  managed_process_running: false,
   endpoint_url: "http://127.0.0.1:8080",
   is_remote: false,
   remote_access_enabled: false,

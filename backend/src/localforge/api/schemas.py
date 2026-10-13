@@ -95,6 +95,7 @@ class EngineProfileView(SchemaModel):
     adapter_version: str | None
     integration_mode: EngineIntegrationMode
     status: EngineProfileStatus
+    managed_process_running: bool
     endpoint_url: str | None
     is_remote: bool
     remote_access_enabled: bool

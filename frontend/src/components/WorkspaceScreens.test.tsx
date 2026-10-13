@@ -10,6 +10,8 @@ import {
   listEngineProfiles,
   listMachineProfiles,
   probeEngineProfile,
+  startEngineProfile,
+  stopEngineProfile,
   updateEngineProfile,
   type AdapterManifest,
   type EngineProfile,
@@ -30,6 +32,8 @@ vi.mock("../lib/api", async (importOriginal) => {
     listMachineProfiles: vi.fn(),
     listRuns: vi.fn(),
     probeEngineProfile: vi.fn(),
+    startEngineProfile: vi.fn(),
+    stopEngineProfile: vi.fn(),
     saveCurrentMachineProfile: vi.fn(),
     updateEngineProfile: vi.fn(),
   };
@@ -67,6 +71,22 @@ const openAiCompatibleFixture: AdapterManifest = {
   documentation_url: null,
 };
 
+const llamaCppFixture: AdapterManifest = {
+  adapter_id: "localforge.llama_cpp",
+  adapter_version: "1.0.0",
+  display_name: "llama.cpp / llama-server",
+  description: "Attach to or launch an existing local llama-server binary.",
+  category: "serving_stack",
+  integration_modes: ["attached_endpoint", "managed_process"],
+  operating_systems: ["windows", "linux", "macos"],
+  declared_capabilities: ["chat_completion", "streaming", "native_metrics"],
+  supported_transports: ["http", "https", "server_sent_events"],
+  native_metrics: ["llamacpp:prompt_tokens_total"],
+  config_schema: {},
+  known_limitations: ["GGUF files must already exist locally."],
+  documentation_url: "https://github.com/ggml-org/llama.cpp",
+};
+
 function engineFixture(overrides: Partial<EngineProfile> = {}): EngineProfile {
   return {
     id: "profile-1",
@@ -76,6 +96,7 @@ function engineFixture(overrides: Partial<EngineProfile> = {}): EngineProfile {
     adapter_version: "1.0.0",
     integration_mode: "attached_endpoint",
     status: "disabled",
+    managed_process_running: false,
     endpoint_url: null,
     is_remote: false,
     remote_access_enabled: false,
@@ -162,6 +183,8 @@ beforeEach(() => {
   vi.mocked(updateEngineProfile).mockResolvedValue(engineFixture());
   vi.mocked(deleteEngineProfile).mockResolvedValue(undefined);
   vi.mocked(probeEngineProfile).mockResolvedValue(probeFixture);
+  vi.mocked(startEngineProfile).mockResolvedValue(engineFixture());
+  vi.mocked(stopEngineProfile).mockResolvedValue(engineFixture());
   vi.mocked(listEngineModels).mockResolvedValue([]);
 });
 
@@ -351,6 +374,96 @@ describe("engine management", () => {
         secret_refs: { api_key: "keyring://LocalForge/test-account" },
       }),
     );
+  });
+
+  it("saves llama.cpp managed launch paths and validated tuning options", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([llamaCppFixture]);
+    render(<EnginesScreen />);
+
+    const adapterHeading = await screen.findByRole("heading", {
+      name: "llama.cpp / llama-server",
+    });
+    const card = adapterHeading.closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Add this adapter" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: "Local llama-server" },
+    });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Connection mode" }), {
+      target: { value: "managed_process" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Local bind URL" }), {
+      target: { value: "http://127.0.0.1:9931" },
+    });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "llama-server executable path" }),
+      {
+        target: { value: "C:\\llama.cpp\\llama-server.exe" },
+      },
+    );
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Existing GGUF model path" }), {
+      target: { value: "C:\\Models\\small.gguf" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Working directory" }), {
+      target: { value: "C:\\llama.cpp\\build\\bin" },
+    });
+    fireEvent.change(within(dialog).getByRole("spinbutton", { name: "Context size Optional" }), {
+      target: { value: "4096" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "GPU layers Optional" }), {
+      target: { value: "all" },
+    });
+    expect(within(dialog).getByText(/never downloads or uploads them/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+
+    expect(createEngineProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapter_id: "localforge.llama_cpp",
+        endpoint_url: "http://127.0.0.1:9931",
+        integration_mode: "managed_process",
+        engine_extensions: {
+          llama_cpp: expect.objectContaining({
+            executable_path: "C:\\llama.cpp\\llama-server.exe",
+            model_path: "C:\\Models\\small.gguf",
+            working_directory: "C:\\llama.cpp\\build\\bin",
+            context_size: 4096,
+            gpu_layers: "all",
+          }),
+        },
+      }),
+    );
+  });
+
+  it("starts and stops managed engine processes from the profile card", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([llamaCppFixture]);
+    let savedProfile = engineFixture({
+      adapter_id: "localforge.llama_cpp",
+      integration_mode: "managed_process",
+      endpoint_url: "http://127.0.0.1:9931",
+    });
+    vi.mocked(listEngineProfiles).mockImplementation(async () => [savedProfile]);
+    vi.mocked(startEngineProfile).mockImplementation(async () => {
+      savedProfile = { ...savedProfile, status: "enabled", managed_process_running: true };
+      return savedProfile;
+    });
+    vi.mocked(stopEngineProfile).mockImplementation(async () => {
+      savedProfile = { ...savedProfile, status: "disabled", managed_process_running: false };
+      return savedProfile;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByRole("heading", { name: "Fixture profile" });
+    expect(screen.getByRole("button", { name: "Probe" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start server" }));
+    expect(await screen.findByRole("button", { name: "Stop server" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Probe" })).toBeEnabled();
+    expect(startEngineProfile).toHaveBeenCalledWith("profile-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop server" }));
+    expect(await screen.findByRole("button", { name: "Start server" })).toBeInTheDocument();
+    expect(stopEngineProfile).toHaveBeenCalledWith("profile-1");
   });
 
   it("keeps the catalog error retryable and the profile empty state visible", async () => {

@@ -1,7 +1,9 @@
 """FastAPI application factory and initial health route."""
 
 import asyncio
+import logging
 import os
+import sqlite3
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -9,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import compare_digest
 from typing import Literal, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -19,7 +21,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
-from localforge.adapters.contracts import AdapterManifest
+from localforge.adapters.contracts import AdapterManifest, AdapterProcessHandle
 from localforge.api.profiles import router as profile_router
 from localforge.api.runs import (
     monitor_run_workers,
@@ -30,6 +32,7 @@ from localforge.api.runs import (
 )
 from localforge.api.schemas import LocalSessionResponse
 from localforge.api.workloads import router as workload_router
+from localforge.core.models import EngineIntegrationMode, EngineProfile, EngineProfileStatus
 from localforge.runs import recover_runs_on_startup
 from localforge.security.local_session import (
     SESSION_HEADER_NAME,
@@ -39,8 +42,24 @@ from localforge.security.local_session import (
 )
 from localforge.storage.database import initialize_database, open_database
 from localforge.storage.paths import default_data_directory
+from localforge.storage.repositories import RecordRepository
 
 MAX_DATASET_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+logger = logging.getLogger(__name__)
+
+
+def _disable_unowned_managed_profiles(connection: sqlite3.Connection) -> None:
+    repository = RecordRepository(connection, EngineProfile)
+    for profile in repository.list():
+        if (
+            profile.integration_mode is EngineIntegrationMode.MANAGED_PROCESS
+            and profile.status is EngineProfileStatus.ENABLED
+        ):
+            repository.update(
+                EngineProfile.model_validate(
+                    profile.model_dump(mode="python") | {"status": EngineProfileStatus.DISABLED}
+                )
+            )
 
 
 class DatasetUploadBodyLimitMiddleware:
@@ -170,6 +189,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         app_instance_id = str(uuid4())
         recovery_connection = open_database(database_path)
         try:
+            _disable_unowned_managed_profiles(recovery_connection)
             recover_runs_on_startup(
                 recovery_connection,
                 app_instance_id=app_instance_id,
@@ -195,6 +215,33 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             worker_monitor.cancel()
             await asyncio.gather(worker_monitor, return_exceptions=True)
             await shutdown_run_workers(application)
+            process_handles = cast(
+                dict[UUID, AdapterProcessHandle], application.state.engine_process_handles
+            )
+            shutdown_connection = open_database(database_path)
+            try:
+                profile_repository = RecordRepository(shutdown_connection, EngineProfile)
+                for profile_id, handle in list(process_handles.items()):
+                    profile = profile_repository.get(profile_id)
+                    if profile is not None:
+                        try:
+                            await adapter_catalog.stop(profile.adapter_id, handle)
+                        except Exception:
+                            logger.exception(
+                                "Could not stop managed engine process during shutdown: %s",
+                                profile_id,
+                            )
+                        else:
+                            if profile.status is not EngineProfileStatus.DISABLED:
+                                profile_repository.update(
+                                    EngineProfile.model_validate(
+                                        profile.model_dump(mode="python")
+                                        | {"status": EngineProfileStatus.DISABLED}
+                                    )
+                                )
+                    process_handles.pop(profile_id, None)
+            finally:
+                shutdown_connection.close()
             await adapter_catalog.close()
 
     application = FastAPI(

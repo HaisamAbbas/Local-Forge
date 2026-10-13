@@ -66,6 +66,7 @@ export type EngineProfile = {
   adapter_version: string | null;
   integration_mode: EngineMode;
   status: "enabled" | "disabled" | "needs_attention";
+  managed_process_running: boolean;
   endpoint_url: string | null;
   is_remote: boolean;
   remote_access_enabled: boolean;
@@ -539,6 +540,10 @@ export const probeEngineProfile = (id: string, confirmRemoteEgress: boolean) =>
 
 export const enableEngineProfile = (id: string) =>
   apiRequest<EngineProfile>(`/api/v1/engines/${id}/enable`, { method: "POST", body: "{}" });
+export const startEngineProfile = (id: string) =>
+  apiRequest<EngineProfile>(`/api/v1/engines/${id}/start`, { method: "POST", body: "{}" });
+export const stopEngineProfile = (id: string) =>
+  apiRequest<EngineProfile>(`/api/v1/engines/${id}/stop`, { method: "POST", body: "{}" });
 
 export const deleteEngineProfile = (id: string) =>
   apiRequest<void>(`/api/v1/engines/${id}`, { method: "DELETE" });
