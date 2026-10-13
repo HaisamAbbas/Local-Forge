@@ -561,6 +561,15 @@ type EngineFormValues = {
   endpoint_url: string;
   health_route: string;
   models_route: string;
+  model_id: string;
+  timeout_seconds: string;
+  max_retries: string;
+  retry_backoff_seconds: string;
+  streaming_mode: "auto" | "required" | "disabled";
+  include_usage: boolean;
+  metrics_route: string;
+  credential_ref: string;
+  clear_credential: boolean;
   user_notes: string;
 };
 
@@ -571,6 +580,15 @@ const blankEngineForm: EngineFormValues = {
   endpoint_url: "",
   health_route: "",
   models_route: "",
+  model_id: "",
+  timeout_seconds: "30",
+  max_retries: "0",
+  retry_backoff_seconds: "0.25",
+  streaming_mode: "auto",
+  include_usage: false,
+  metrics_route: "",
+  credential_ref: "",
+  clear_credential: false,
   user_notes: "",
 };
 
@@ -589,6 +607,12 @@ function EngineProfileDialog({
   onClose: () => void;
   onSubmit: (input: EngineProfileInput) => void;
 }) {
+  const isOpenAiCompatible = manifest.adapter_id === "localforge.openai_compatible";
+  const savedExtension = initial?.engine_extensions?.openai_compatible ?? {};
+  const savedString = (key: string, fallback: string) => {
+    const value = savedExtension[key];
+    return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
+  };
   const [values, setValues] = useState<EngineFormValues>(() =>
     initial
       ? {
@@ -598,6 +622,19 @@ function EngineProfileDialog({
           endpoint_url: initial.endpoint_url ?? "",
           health_route: "",
           models_route: "",
+          model_id: savedString("model_id", ""),
+          timeout_seconds: savedString("timeout_seconds", "30"),
+          max_retries: savedString("max_retries", "0"),
+          retry_backoff_seconds: savedString("retry_backoff_seconds", "0.25"),
+          streaming_mode:
+            savedExtension.streaming_mode === "required" ||
+            savedExtension.streaming_mode === "disabled"
+              ? savedExtension.streaming_mode
+              : "auto",
+          include_usage: savedExtension.include_usage === true,
+          metrics_route: savedString("metrics_route", ""),
+          credential_ref: "",
+          clear_credential: false,
           user_notes: initial.user_notes ?? "",
         }
       : { ...blankEngineForm, integration_mode: manifest.integration_modes[0] ?? "" },
@@ -623,6 +660,36 @@ function EngineProfileDialog({
       setFormError("Enter a valid HTTP or HTTPS endpoint URL.");
       return;
     }
+    if (isOpenAiCompatible) {
+      const timeout = Number(values.timeout_seconds);
+      const retries = Number(values.max_retries);
+      const backoff = Number(values.retry_backoff_seconds);
+      if (!values.endpoint_url.trim()) {
+        setFormError("Enter the OpenAI-compatible API base URL.");
+        return;
+      }
+      if (!Number.isFinite(timeout) || timeout < 0.1 || timeout > 300) {
+        setFormError("Timeout must be between 0.1 and 300 seconds.");
+        return;
+      }
+      if (!Number.isInteger(retries) || retries < 0 || retries > 3) {
+        setFormError("Connection retries must be an integer from 0 to 3.");
+        return;
+      }
+      if (!Number.isFinite(backoff) || backoff < 0 || backoff > 2) {
+        setFormError("Retry delay must be between 0 and 2 seconds.");
+        return;
+      }
+      if (
+        values.credential_ref.trim() &&
+        !/^(keyring:\/\/|localforge-credential:\/\/)[^\s]+$/.test(values.credential_ref.trim())
+      ) {
+        setFormError(
+          "Enter a keyring:// or localforge-credential:// reference, not a secret value.",
+        );
+        return;
+      }
+    }
     setFormError("");
     const input: EngineProfileInput = {
       label: values.label.trim(),
@@ -636,6 +703,27 @@ function EngineProfileDialog({
       input.health_route = values.health_route.trim() || null;
     if (!initial || values.models_route.trim())
       input.models_route = values.models_route.trim() || null;
+    if (isOpenAiCompatible) {
+      const extension: Record<string, unknown> = { ...savedExtension };
+      if (values.model_id.trim()) extension.model_id = values.model_id.trim();
+      else delete extension.model_id;
+      extension.timeout_seconds = Number(values.timeout_seconds);
+      extension.max_retries = Number(values.max_retries);
+      extension.retry_backoff_seconds = Number(values.retry_backoff_seconds);
+      extension.streaming_mode = values.streaming_mode;
+      extension.include_usage = values.include_usage;
+      if (values.metrics_route.trim()) extension.metrics_route = values.metrics_route.trim();
+      else delete extension.metrics_route;
+      input.engine_extensions = {
+        ...(initial?.engine_extensions ?? {}),
+        openai_compatible: extension,
+      };
+      if (values.credential_ref.trim()) {
+        input.secret_refs = { api_key: values.credential_ref.trim() };
+      } else if (values.clear_credential) {
+        input.secret_refs = {};
+      }
+    }
     onSubmit(input);
   };
 
@@ -694,12 +782,16 @@ function EngineProfileDialog({
             </select>
           </label>
           <label>
-            Endpoint URL <span className="optional-label">Optional</span>
+            {isOpenAiCompatible ? "API base URL" : "Endpoint URL"}{" "}
+            {!isOpenAiCompatible && <span className="optional-label">Optional</span>}
             <input
               autoComplete="url"
               maxLength={1000}
               onChange={(event) => setField("endpoint_url", event.target.value)}
-              placeholder="http://127.0.0.1:8000"
+              placeholder={
+                isOpenAiCompatible ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:8000"
+              }
+              required={isOpenAiCompatible}
               type="url"
               value={values.endpoint_url}
             />
@@ -712,6 +804,116 @@ function EngineProfileDialog({
               value={values.engine_display_name}
             />
           </label>
+          {isOpenAiCompatible && (
+            <>
+              <label>
+                Model ID{" "}
+                <span className="optional-label">Optional if the endpoint lists models</span>
+                <input
+                  maxLength={500}
+                  onChange={(event) => setField("model_id", event.target.value)}
+                  placeholder="model ID reported by your endpoint"
+                  value={values.model_id}
+                />
+              </label>
+              <label>
+                Request timeout (seconds)
+                <input
+                  max={300}
+                  min={0.1}
+                  onChange={(event) => setField("timeout_seconds", event.target.value)}
+                  step="any"
+                  type="number"
+                  value={values.timeout_seconds}
+                />
+              </label>
+              <label>
+                Streaming mode
+                <select
+                  onChange={(event) =>
+                    setField(
+                      "streaming_mode",
+                      event.target.value as EngineFormValues["streaming_mode"],
+                    )
+                  }
+                  value={values.streaming_mode}
+                >
+                  <option value="auto">Use streaming when supported</option>
+                  <option value="required">Require streaming</option>
+                  <option value="disabled">Use non-streaming responses</option>
+                </select>
+              </label>
+              <details className="advanced-fields">
+                <summary>Endpoint options</summary>
+                <p className="helper-copy">
+                  Retries apply only when the connection fails before an HTTP response. The generic
+                  adapter never replays a request after output begins.
+                </p>
+                <label>
+                  Connection retries <span className="optional-label">0–3, default 0</span>
+                  <input
+                    max={3}
+                    min={0}
+                    onChange={(event) => setField("max_retries", event.target.value)}
+                    step={1}
+                    type="number"
+                    value={values.max_retries}
+                  />
+                </label>
+                <label>
+                  Retry delay (seconds)
+                  <input
+                    max={2}
+                    min={0}
+                    onChange={(event) => setField("retry_backoff_seconds", event.target.value)}
+                    step="any"
+                    type="number"
+                    value={values.retry_backoff_seconds}
+                  />
+                </label>
+                <label>
+                  Metrics route <span className="optional-label">Optional</span>
+                  <input
+                    maxLength={500}
+                    onChange={(event) => setField("metrics_route", event.target.value)}
+                    placeholder="/metrics"
+                    value={values.metrics_route}
+                  />
+                </label>
+                <label className="workload-check">
+                  <input
+                    checked={values.include_usage}
+                    onChange={(event) => setField("include_usage", event.target.checked)}
+                    type="checkbox"
+                  />
+                  Request optional streaming usage counts when supported
+                </label>
+                <label>
+                  API key credential reference <span className="optional-label">Optional</span>
+                  <input
+                    autoComplete="off"
+                    maxLength={256}
+                    onChange={(event) => setField("credential_ref", event.target.value)}
+                    placeholder="keyring://LocalForge/account-name"
+                    value={values.credential_ref}
+                  />
+                  <span className="helper-copy">
+                    Enter a reference to an existing OS keyring entry. Never paste the key itself.
+                  </span>
+                </label>
+                {initial?.credential_configured && (
+                  <label className="workload-check">
+                    <input
+                      checked={values.clear_credential}
+                      onChange={(event) => setField("clear_credential", event.target.checked)}
+                      type="checkbox"
+                    />
+                    Remove the saved credential reference
+                  </label>
+                )}
+              </details>
+            </>
+          )}
           <details className="advanced-fields">
             <summary>Connection details</summary>
             <label>
@@ -1046,6 +1248,9 @@ export function EnginesScreen() {
         }
         if (input.health_route !== undefined) patch.health_route = input.health_route;
         if (input.models_route !== undefined) patch.models_route = input.models_route;
+        if (input.engine_extensions !== undefined)
+          patch.engine_extensions = input.engine_extensions;
+        if (input.secret_refs !== undefined) patch.secret_refs = input.secret_refs;
         await updateEngineProfile(editing.id, patch);
       } else {
         await createEngineProfile(input);

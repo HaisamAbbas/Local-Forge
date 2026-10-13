@@ -76,6 +76,7 @@ export type EngineProfile = {
   machine_profile_id: string | null;
   selected_model_ref: string | null;
   user_notes: string | null;
+  engine_extensions?: Record<string, Record<string, unknown>>;
   configured_fields: string[];
   credential_configured: boolean;
   created_at: string;
@@ -367,6 +368,8 @@ export type EngineProfileInput = {
   endpoint_url: string | null;
   health_route?: string | null;
   models_route?: string | null;
+  secret_refs?: Record<string, string>;
+  engine_extensions?: Record<string, Record<string, unknown>>;
   user_notes: string | null;
 };
 
@@ -517,6 +520,10 @@ export const updateEngineProfile = (id: string, input: Partial<EngineProfileInpu
     user_notes: input.user_notes,
     ...(input.health_route === undefined ? {} : { health_route: input.health_route }),
     ...(input.models_route === undefined ? {} : { models_route: input.models_route }),
+    ...(input.secret_refs === undefined ? {} : { secret_refs: input.secret_refs }),
+    ...(input.engine_extensions === undefined
+      ? {}
+      : { engine_extensions: input.engine_extensions }),
   };
   return apiRequest<EngineProfile>(`/api/v1/engines/${id}`, {
     method: "PATCH",

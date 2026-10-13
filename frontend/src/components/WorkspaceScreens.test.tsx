@@ -51,6 +51,22 @@ const catalogFixture: AdapterManifest = {
   documentation_url: null,
 };
 
+const openAiCompatibleFixture: AdapterManifest = {
+  adapter_id: "localforge.openai_compatible",
+  adapter_version: "1.0.0",
+  display_name: "OpenAI-compatible endpoint",
+  description: "Connect to an attached chat-completions endpoint.",
+  category: "openai_compatible",
+  integration_modes: ["attached_endpoint"],
+  operating_systems: [],
+  declared_capabilities: ["chat_completion", "streaming", "model_inventory"],
+  supported_transports: ["http", "https", "server_sent_events"],
+  native_metrics: [],
+  config_schema: {},
+  known_limitations: ["The underlying engine remains unknown unless named by the user."],
+  documentation_url: null,
+};
+
 function engineFixture(overrides: Partial<EngineProfile> = {}): EngineProfile {
   return {
     id: "profile-1",
@@ -290,6 +306,51 @@ describe("engine management", () => {
     expect(screen.getByText("Probe status").parentElement).toHaveTextContent("Succeeded");
     expect(screen.getByRole("alert")).toHaveTextContent("Saved model list unavailable");
     expect(probeEngineProfile).toHaveBeenCalledWith("profile-1", false);
+  });
+
+  it("saves generic endpoint settings and only accepts a credential reference", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([catalogFixture, openAiCompatibleFixture]);
+    render(<EnginesScreen />);
+
+    const endpointHeading = await screen.findByRole("heading", {
+      name: "OpenAI-compatible endpoint",
+    });
+    const card = endpointHeading.closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Add this adapter" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: "Local API" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "API base URL" }), {
+      target: { value: "http://127.0.0.1:9000/v1" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Model ID/ }), {
+      target: { value: "fixture-model" },
+    });
+    fireEvent.change(within(dialog).getByRole("spinbutton", { name: /Connection retries/ }), {
+      target: { value: "2" },
+    });
+    fireEvent.change(within(dialog).getByPlaceholderText("keyring://LocalForge/account-name"), {
+      target: { value: "keyring://LocalForge/test-account" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+
+    expect(createEngineProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapter_id: "localforge.openai_compatible",
+        endpoint_url: "http://127.0.0.1:9000/v1",
+        engine_extensions: {
+          openai_compatible: expect.objectContaining({
+            model_id: "fixture-model",
+            max_retries: 2,
+            streaming_mode: "auto",
+          }),
+        },
+        secret_refs: { api_key: "keyring://LocalForge/test-account" },
+      }),
+    );
   });
 
   it("keeps the catalog error retryable and the profile empty state visible", async () => {

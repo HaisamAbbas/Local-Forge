@@ -4,7 +4,11 @@ test("builds, reviews, saves, and launches a fake-engine benchmark plan", async 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/#engines");
   await expect(page.getByRole("heading", { name: "Engine catalog" })).toBeVisible();
-  await page.getByRole("button", { name: "Add this adapter" }).click();
+  await page
+    .locator(".catalog-card")
+    .filter({ has: page.getByRole("heading", { name: "Deterministic Fake Engine" }) })
+    .getByRole("button", { name: "Add this adapter" })
+    .click();
   const dialog = page.getByRole("dialog", { name: "Add an engine" });
   await dialog.getByRole("textbox", { name: "Profile name" }).fill("Prompt 9 fake target");
   await dialog.getByRole("button", { name: "Add engine" }).click();

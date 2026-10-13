@@ -2,7 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function registerFakeEngine(page: Page, label: string) {
   await page.goto("/#engines");
-  await page.getByRole("button", { name: "Add this adapter" }).click();
+  await page
+    .locator(".catalog-card")
+    .filter({ has: page.getByRole("heading", { name: "Deterministic Fake Engine" }) })
+    .getByRole("button", { name: "Add this adapter" })
+    .click();
   const dialog = page.getByRole("dialog", { name: "Add an engine" });
   await dialog.getByRole("textbox", { name: "Profile name" }).fill(label);
   await dialog.getByRole("button", { name: "Add engine" }).click();

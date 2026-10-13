@@ -185,6 +185,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 async function chooseReadyTarget() {
+  await waitFor(() => expect(listEngineModels).toHaveBeenCalledWith(engine.id));
   await screen.findByRole("option", { name: /Fixture model/ });
   await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue(model.id));
 }

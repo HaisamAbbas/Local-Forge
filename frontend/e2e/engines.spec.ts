@@ -7,7 +7,11 @@ test("registers, probes, edits and removes a fake engine from the UI", async ({ 
   await expect(page.getByText("Deterministic Fake Engine").first()).toBeVisible();
   await expect(page.getByText("No engine profiles are configured.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Add this adapter" }).click();
+  await page
+    .locator(".catalog-card")
+    .filter({ has: page.getByRole("heading", { name: "Deterministic Fake Engine" }) })
+    .getByRole("button", { name: "Add this adapter" })
+    .click();
   const addDialog = page.getByRole("dialog", { name: "Add an engine" });
   const profileName = addDialog.getByRole("textbox", { name: "Profile name" });
   await expect(profileName).toBeFocused();
