@@ -7,8 +7,8 @@ explicit confirmation through the local API; remote inference requests use the c
 
 The local UI, API, SQLite persistence, machine and engine profiles, workload builder, benchmark
 runner, and run history are implemented. The adapter catalog includes a deterministic fake engine,
-a generic attached OpenAI-compatible chat-completions adapter, an attached llama.cpp adapter, and
-an attach-only Ollama adapter. The fake engine does not load a model and its timings are not
+a generic attached OpenAI-compatible chat-completions adapter, llama.cpp, Ollama, and attach-only
+vLLM and SGLang connectors. The fake engine does not load a model and its timings are not
 model-performance measurements. Real endpoint requests are sent by the evaluator machine's local
 API to the configured endpoint. Ordinary checks do not download models or contact public endpoints.
 
@@ -125,6 +125,20 @@ unknown unless the server exposes verified runner details; model family or file 
 to infer it. Ollama's per-request duration fields are saved as raw engine-native nanosecond
 observations. Aggregate Ollama metric scraping is unavailable. See the [Ollama adapter guide](docs/ollama.md)
 for supported behavior and an opt-in smoke test.
+
+### Connect vLLM or SGLang
+
+Both serving-engine connectors attach to a server that is already running; LOCALFORGE does not
+install the engine, download weights, launch or stop the process, or infer GPU selection. Add
+**vLLM serving endpoint** or **SGLang serving endpoint** under **Engines**, enter its server root URL,
+probe it, and select one of its reported models in a workload. The default ports are `8000` for
+vLLM and `30000` for SGLang. Optional native Prometheus samples retain their engine names and
+definitions and remain separate from client-measured benchmark results. Missing native metrics do
+not block a client benchmark.
+
+See the [vLLM adapter guide](docs/vllm.md) and [SGLang adapter guide](docs/sglang.md) for route,
+credential, metric, version-discovery, and platform coverage details. Neither connector has been
+live-tested against an installed serving engine or GPU; default checks use local fixtures only.
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:

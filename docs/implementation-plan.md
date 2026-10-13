@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-14 are implemented and verified; Prompt 15A is next.
+**Status:** Prompts 0-15A are implemented and verified; Prompt 15B is next.
 **Reviewed:** 13 October 2026
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -549,3 +549,59 @@ Frontend, from `frontend/`:
 - `npm run e2e` - passed (6 Microsoft Edge tests on isolated API/UI ports).
 
 Repository diff check: `git diff --check` - passed.
+
+## Prompt 15A completion record
+
+### Delivered
+
+- Added distinct attach-only `localforge.vllm` and `localforge.sglang` adapters using the shared
+  OpenAI-compatible chat transport. Both expose health, model inventory, streaming, usage, optional
+  Prometheus metrics, and runtime fingerprints without installing or launching an engine.
+- Scoped observed capabilities to the server-reported version when it is available. vLLM reads
+  `/version`; SGLang does not call `/server_info` or `/get_server_info` because they can expose
+  launch secrets. An operator-selected SGLang version route is validated, and unsafe SGLang routes
+  are rejected across all route settings, including percent-encoded spellings.
+- Added a bounded Prometheus text parser that preserves each engine's raw metric name, labels,
+  definition, type, and component. It retains known units, leaves unknown units native, does not
+  flatten histogram/summary structures into client metrics, and diagnoses missing definitions,
+  malformed samples, unsupported types, other-engine samples, and truncation after its sample cap.
+- Added an explicit usage-count capability probe when the profile requests streaming usage.
+  SGLang leaves the probe opt-in; vLLM requests usage by default. Remote probe egress disclosure
+  describes the additional short check.
+- Added privacy-filtered runtime/model metadata and configuration fingerprints. Device details stay
+  unknown unless a safe route reports them. Added local fixture tests for the shared contract,
+  endpoint errors, model inventory, streaming and usage, version discovery, auth, timeouts, metrics,
+  secret filtering, SGLang unsafe-route rejection, and malformed/missing/renamed metrics.
+- Added opt-in vLLM and SGLang live smoke tests. They require a URL and an already-served model,
+  probe the server before sending the test completion, and never install engines or fetch model
+  artifacts. The vLLM probe sends two short checks by default; SGLang sends one unless usage is
+  opted in.
+- Documented setup, routes, credentials, native metrics, version coverage, and platform limits in
+  `docs/vllm.md` and `docs/sglang.md`; linked the guides from `README.md`.
+- Reviewed the official vLLM serving, metrics, and launch references, and SGLang observability,
+  production-metrics, protocol, and HTTP-server references on 2026-10-13.
+
+### Scope and limitations
+
+- Both adapters are attach-only. They do not own processes, install serving engines, download
+  weights, or manage CUDA/GPU configuration.
+- Fixture version strings `0.10.2` (vLLM) and `0.4.9` (SGLang) are synthetic test values, not
+  installed or live-validated releases. No real server version, accelerator, or operating system
+  has been live-validated. The opt-in live tests were skipped because no engine endpoint/model was
+  explicitly configured.
+- SGLang's version is unknown by default. The connector uses only allowlisted `/model_info` data;
+  device and full launch configuration are not reported.
+- Native Prometheus samples remain engine-native observations with their original names and
+  definitions. Missing or disabled optional metrics do not block client-side benchmarks.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run ruff format --check src tests` - passed (72 files).
+- `uv run ruff check src tests` - passed.
+- `uv run mypy src` - passed (41 source files).
+- `uv run pytest -q` - passed (200 tests; 5 opt-in live tests skipped).
+- `git diff --check` - passed.
+
+No frontend files were changed for this prompt.
