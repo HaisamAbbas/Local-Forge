@@ -7,6 +7,7 @@ import {
   filterRecords,
   findRunMetric,
   formatMeasurement,
+  groupWarnings,
   loadLevels,
   outcomeRecords,
   sourceCounts,
@@ -207,6 +208,26 @@ describe("record explorer helpers", () => {
     ]);
     expect(filterRecords(metrics, "system_observed", "")).toHaveLength(1);
     expect(filterRecords(metrics, "all", "TTFT")).toHaveLength(1);
+  });
+});
+
+describe("groupWarnings", () => {
+  it("collapses repeated codes, keeps distinct messages, and explains known codes", () => {
+    const groups = groupWarnings([
+      { sequence_number: 3, payload: { code: "native_metrics_unavailable", message: "before" } },
+      { sequence_number: 4, payload: { code: "native_metric_missing", message: "a missing" } },
+      { sequence_number: 5, payload: { code: "native_metric_missing", message: "b missing" } },
+      { sequence_number: 6, payload: { code: "native_metric_missing", message: "b missing" } },
+      { sequence_number: 7, payload: { code: "custom_warning", message: "Check this." } },
+    ]);
+    expect(groups.map((group) => [group.code, group.count])).toEqual([
+      ["native_metrics_unavailable", 1],
+      ["native_metric_missing", 3],
+      ["custom_warning", 1],
+    ]);
+    expect(groups[1]?.messages).toEqual(["a missing", "b missing"]);
+    expect(groups[1]?.explanation).toMatch(/Per-request values are unaffected/);
+    expect(groups[2]?.explanation).toBeNull();
   });
 });
 

@@ -388,6 +388,43 @@ export function filterRecords(
     );
 }
 
+const WARNING_EXPLANATIONS: Record<string, string> = {
+  native_metrics_unavailable:
+    "The engine exposes no server-wide counters to snapshot before and after the run. Per-request engine values and LocalForge's own measurements are unaffected.",
+  native_metric_missing:
+    "Expected server-wide counters were absent from a snapshot, so no before/after change could be computed for them. Per-request values are unaffected.",
+};
+
+export type WarningGroup = {
+  code: string;
+  count: number;
+  explanation: string | null;
+  messages: string[];
+  firstSequence: number;
+};
+
+/** One entry per warning code, in order of first occurrence, with each distinct message kept. */
+export function groupWarnings(
+  events: Array<{ sequence_number: number; payload: Record<string, unknown> }>,
+): WarningGroup[] {
+  const groups = new Map<string, WarningGroup>();
+  for (const event of events) {
+    const code = String(event.payload.code ?? "warning");
+    const message = String(event.payload.message ?? "Review this warning in the event timeline.");
+    const group = groups.get(code) ?? {
+      code,
+      count: 0,
+      explanation: WARNING_EXPLANATIONS[code] ?? null,
+      messages: [],
+      firstSequence: event.sequence_number,
+    };
+    group.count += 1;
+    if (!group.messages.includes(message)) group.messages.push(message);
+    groups.set(code, group);
+  }
+  return [...groups.values()].sort((left, right) => left.firstSequence - right.firstSequence);
+}
+
 /** Compact number formatting for summary tables: fewer decimals as magnitude grows. */
 export function formatMeasurement(value: number | null | undefined, unit = ""): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
