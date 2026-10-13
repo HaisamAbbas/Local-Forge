@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-10 are implemented and verified; Prompt 11 is next.
+**Status:** Prompts 0-11 are implemented and verified; Prompt 12 is next.
 **Reviewed:** 12 October 2026  
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -435,3 +435,40 @@ Frontend, from `frontend/`:
 - `npm run e2e` — passed (4 Chromium tests); Prompt 10 cancellation scenario also passed in isolation.
 
 Repository diff check: `git diff --check` — passed.
+
+## Prompt 11 completion record
+
+### Delivered
+
+- Added an attached generic OpenAI-compatible adapter for chat completions, bounded model inventory, optional health and metrics-route probes, non-streaming and server-sent-event streaming responses, usage counts when supplied, cancellation, and conservative connection-only retries.
+- Kept connector settings under `engine_extensions.openai_compatible`; accepted OS-keyring references for optional credentials without returning references in profile API responses or exposing key material in adapter diagnostics/errors. The endpoint's vendor and engine version remain unknown.
+- Added the endpoint profile form, model-ID fallback for servers without a model-list route, timeout, streaming and retry controls, optional usage request, metrics-route availability check, and credential reference entry. Remote probes continue to require the existing explicit egress confirmation; the disclosure describes the minimal probe request.
+- Added loopback mock-server contract coverage for streaming/non-streaming, usage present/missing, malformed events, errors, disconnects, timeouts, unauthorized access, cancellation, safe retries, URL validation, and secret redaction. Added profile-form coverage for namespaced settings and credential references. No public endpoint or downloaded model is used by default checks.
+- Verified compatibility against the official [Chat Completions API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create), [streaming events](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events), and [models list](https://developers.openai.com/api/reference/resources/models/methods/list) references.
+- Added a live endpoint smoke test that is skipped unless `LOCALFORGE_OPENAI_COMPATIBLE_INTEGRATION=1`, a base URL, and a model ID are explicitly configured. Optional credentials are resolved by keyring reference; the test never accepts a plaintext API key.
+
+### Scope and limitations
+
+- The endpoint must already be running; this adapter does not install, download, or launch inference servers. It supports the portable chat-completions shape only, not vendor-specific APIs.
+- The optional metrics route is probed for reachability only; `read_metrics` remains unavailable and arbitrary payloads are never interpreted. Engine identity and server version are not inferred.
+- Credentials must already exist in a supported OS keyring backend and be referenced by the profile. This adapter does not create keyring entries.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` - passed (55 files).
+- `uv run --locked ruff check src tests` - passed.
+- `uv run --locked mypy src` - passed (33 source files).
+- `uv run --locked pytest -q` - passed (129 tests; 1 opt-in integration test skipped by default).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` - passed.
+- `npm run lint` - passed.
+- `npm run typecheck` - passed.
+- `npm run test` - passed (26 tests).
+- `npm run build` - passed.
+- `npm run e2e` - passed (4 Chromium tests).
+
+Repository diff check: `git diff --check` - passed.

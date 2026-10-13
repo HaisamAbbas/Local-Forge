@@ -5,16 +5,12 @@ dashboard and control API run on the evaluator's machine and bind to loopback du
 Requests go from that machine to the selected inference engine. Remote endpoint probes require
 explicit confirmation through the local API; remote inference requests use the configured endpoint.
 
-The local UI shell, API, typed data contracts, SQLite persistence, and machine/engine profile APIs
-are in place. The API supports deterministic workload definitions, bounded JSONL/CSV dataset
-validation, optional hash-addressed local dataset retention, and benchmark-plan preflight. The
-adapter catalog currently includes a deterministic fake engine for exercising the integration
-boundary; it does not load a model or produce inference performance measurements. Saved plans can
-run in a separate worker process, with lifecycle transitions, request samples, resource locks,
-cancellation, and replayable sanitized events persisted locally. The dashboard is not yet wired to
-these APIs, and fake-adapter timing must not be treated as model performance. Real inference
-adapters and the API-backed dashboard arrive in later phases. Ordinary checks do not download
-models.
+The local UI, API, SQLite persistence, machine and engine profiles, workload builder, benchmark
+runner, and run history are implemented. The adapter catalog includes a deterministic fake engine
+for checking the workflow and a generic attached OpenAI-compatible chat-completions adapter. The
+fake engine does not load a model and its timings are not model-performance measurements. Real
+endpoint requests are sent by the evaluator machine's local API to the configured endpoint. Ordinary
+checks do not download models or contact public endpoints.
 
 ## Requirements
 
@@ -67,6 +63,43 @@ sequence-cursor replay or Server-Sent Events at `/api/v1/runs/{run_id}/events/st
 samples retain prompt and output text only when the saved plan explicitly enables retention.
 Metric formulas, provenance, percentile minimums, and quality flags are documented in
 [`docs/metrics.md`](docs/metrics.md).
+
+### Connect an OpenAI-compatible endpoint
+
+The endpoint must already be running and reachable from the machine running LocalForge. In
+**Engines**, add **OpenAI-compatible endpoint**, set its API base URL (for example,
+`http://127.0.0.1:1234/v1`), then probe it and choose a model reported by its models route. If the
+endpoint has no compatible model-list route, enter its model ID in the profile. LocalForge sends
+chat completions to the configured base URL's `chat/completions` route and uses server-sent events
+when enabled and supported. Timeouts, retry count, streaming mode, and optional usage requests are
+configurable in the profile.
+
+An API key is optional. Store it in the operating system credential manager and enter a reference,
+not the key itself: `keyring://<service>/<account>` looks up that service/account pair, while
+`localforge-credential://<account>` looks up the `LocalForge` service. The adapter only resolves
+credentials through a supported OS keyring backend. Localhost endpoints stay local; a non-local
+endpoint requires explicit egress confirmation before probing, and the probe may send a minimal
+one-token chat-completion check. Inference requests also go to the configured endpoint.
+
+This connector treats the endpoint as generic and does not guess the server vendor, engine version,
+or underlying model identity. An optional metrics route is checked for availability only; it is not
+normalized into benchmark metrics. See the official [Chat Completions API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+[streaming events](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events),
+and [models list](https://developers.openai.com/api/reference/resources/models/methods/list) references
+for the portable request and response shapes this adapter supports.
+
+The real-endpoint smoke test is skipped by default. To opt in, set the following variables in
+PowerShell and run only that test; it sends one short completion to the configured endpoint. The
+credential reference is optional and should point to an existing OS keyring entry.
+
+```powershell
+$env:LOCALFORGE_OPENAI_COMPATIBLE_INTEGRATION = "1"
+$env:LOCALFORGE_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1"
+$env:LOCALFORGE_OPENAI_COMPATIBLE_MODEL_ID = "your-model-id"
+$env:LOCALFORGE_OPENAI_COMPATIBLE_CREDENTIAL_REF = "keyring://service/account"
+Set-Location backend
+uv run pytest tests/test_openai_compatible_integration.py
+```
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:
