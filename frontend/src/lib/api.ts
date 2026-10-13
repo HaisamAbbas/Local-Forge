@@ -134,6 +134,17 @@ export type EngineModel = {
   status: string;
 };
 
+export type PlaygroundStreamEvent =
+  | { type: "chunk"; text: string }
+  | {
+      type: "usage";
+      input_tokens: number | null;
+      output_tokens: number | null;
+      exact: boolean;
+    }
+  | { type: "complete"; elapsed_ms: number }
+  | { type: "error"; code: string; message: string };
+
 export type BenchmarkRun = {
   id: string;
   plan_id: string;
@@ -713,6 +724,98 @@ export const createReport = (input: {
   });
 export const listEngineModels = (id: string) =>
   apiRequest<EngineModel[]>(`/api/v1/engines/${id}/models`);
+
+export async function streamPlaygroundPrompt(
+  input: {
+    profile_id: string;
+    model_ref: string;
+    prompt: string;
+    max_tokens: number;
+    temperature: number;
+    confirm_remote_egress: boolean;
+  },
+  signal: AbortSignal,
+  onEvent: (event: PlaygroundStreamEvent) => void,
+): Promise<void> {
+  const headers = new Headers({
+    Accept: "application/x-ndjson",
+    "Content-Type": "application/json",
+    "X-LOCALFORGE-SESSION": await readSessionToken(),
+  });
+  let response: Response;
+  try {
+    response = await fetch("/api/v1/playground/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(input),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("The local API could not be reached. Check that it is running, then retry.", 0);
+  }
+
+  if (!response.ok) {
+    let message = `The local API returned an error (${response.status}).`;
+    let code: string | null = null;
+    let host: string | null = null;
+    try {
+      const payload: unknown = await response.json();
+      const detail =
+        typeof payload === "object" && payload !== null
+          ? (payload as { detail?: unknown }).detail
+          : null;
+      if (typeof detail === "object" && detail !== null) {
+        const record = detail as { message?: unknown; code?: unknown; host?: unknown };
+        if (typeof record.message === "string") message = record.message;
+        if (typeof record.code === "string") code = record.code;
+        if (typeof record.host === "string") host = record.host;
+      }
+    } catch {
+      // Retain the bounded status message for non-JSON responses.
+    }
+    throw new ApiError(message, response.status, code, host);
+  }
+
+  if (!response.body) throw new ApiError("The engine returned no response stream.", 502);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let completed = false;
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new ApiError("The engine returned an invalid stream event.", 502);
+    }
+    if (typeof value !== "object" || value === null || typeof (value as { type?: unknown }).type !== "string")
+      throw new ApiError("The engine returned an invalid stream event.", 502);
+    const event = value as PlaygroundStreamEvent;
+    if (event.type === "error") throw new ApiError(event.message, 502, event.code);
+    if (event.type === "complete") completed = true;
+    onEvent(event);
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      let newline = pending.indexOf("\n");
+      while (newline >= 0) {
+        consumeLine(pending.slice(0, newline).replace(/\r$/, ""));
+        pending = pending.slice(newline + 1);
+        newline = pending.indexOf("\n");
+      }
+      if (done) break;
+    }
+    if (pending.trim()) consumeLine(pending);
+    if (!completed) throw new ApiError("The engine stream ended before completion.", 502);
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 export const createEngineProfile = (input: EngineProfileInput) =>
   apiRequest<EngineProfile>("/api/v1/engines", { method: "POST", body: JSON.stringify(input) });
