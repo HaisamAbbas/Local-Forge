@@ -293,6 +293,86 @@ async def _capture_native_metrics(
     return result_metrics
 
 
+def _localai_fingerprint_config(
+    engine: EngineProfile,
+    config: AdapterConfiguration,
+    model_ref: str,
+) -> AdapterConfiguration:
+    """Pass the run's chosen LocalAI model to safe, optional backend discovery."""
+
+    if engine.adapter_id != "localforge.localai":
+        return config
+    extensions = {name: dict(values) for name, values in engine.engine_extensions.items()}
+    localai = extensions.setdefault("localai", {})
+    configured_model = localai.get("model_id")
+    if not isinstance(configured_model, str) or not configured_model.strip():
+        localai["model_id"] = model_ref
+    values = dict(config.values)
+    values["engine_extensions"] = cast(JsonValue, extensions)
+    return config.model_copy(update={"values": values})
+
+
+def _sanitize_runtime_fingerprint_snapshot(value: JsonValue) -> JsonValue:
+    """Omit endpoint paths because user-configured path segments can contain credentials."""
+
+    if isinstance(value, dict):
+        return cast(
+            JsonValue,
+            {
+                key: _sanitize_runtime_fingerprint_snapshot(nested)
+                for key, nested in value.items()
+                if key.casefold() != "endpoint_path"
+            },
+        )
+    if isinstance(value, list):
+        return [_sanitize_runtime_fingerprint_snapshot(nested) for nested in value]
+    return value
+
+
+async def _capture_runtime_fingerprint(
+    *,
+    connection: sqlite3.Connection,
+    catalog: AdapterCatalog,
+    engine: EngineProfile,
+    config: AdapterConfiguration,
+    model_ref: str,
+    run_id: UUID,
+    timeout_seconds: float,
+) -> None:
+    """Persist bounded, privacy-filtered adapter and stack layers before measurements."""
+
+    fingerprint_config = _localai_fingerprint_config(engine, config, model_ref)
+    try:
+        fingerprint = await asyncio.wait_for(
+            catalog.collect_fingerprint(engine.adapter_id, fingerprint_config),
+            timeout=min(timeout_seconds, 15.0),
+        )
+        value = _sanitize_runtime_fingerprint_snapshot(
+            cast(JsonValue, fingerprint.model_dump(mode="json"))
+        )
+    except TimeoutError:
+        value = {
+            "status": "unavailable",
+            "adapter_id": engine.adapter_id,
+            "reason": "timeout",
+        }
+    except Exception:
+        value = {
+            "status": "unavailable",
+            "adapter_id": engine.adapter_id,
+            "reason": "collection_failed",
+        }
+
+    with transaction(connection):
+        repository = RecordRepository(connection, BenchmarkRun)
+        run = repository.get(run_id)
+        if run is None:
+            return
+        snapshot = dict(run.profile_snapshot)
+        snapshot["runtime_fingerprint"] = value
+        repository.update(run.model_copy(update={"profile_snapshot": snapshot}))
+
+
 async def _execute_request(
     *,
     connection: sqlite3.Connection,
@@ -725,6 +805,15 @@ async def execute_run(
                 raise RunSetupError(
                     "adapter_config_invalid", "The adapter rejected the saved engine configuration."
                 )
+            await _capture_runtime_fingerprint(
+                connection=connection,
+                catalog=catalog,
+                engine=engine,
+                config=config,
+                model_ref=model_ref,
+                run_id=run_id,
+                timeout_seconds=plan.timeout_seconds,
+            )
 
             sweep_levels = (
                 workload.concurrency_levels

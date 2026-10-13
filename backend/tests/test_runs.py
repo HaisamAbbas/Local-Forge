@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from localforge.adapters.catalog import AdapterCatalog
-from localforge.adapters.contracts import AdapterMetric, StreamEventType
+from localforge.adapters.contracts import AdapterConfiguration, AdapterMetric, StreamEventType
 from localforge.adapters.fake import FakeEngineAdapter, FakeEngineScenario, FakeStreamFailure
 from localforge.api import runs as run_api
 from localforge.api.main import AppSettings, create_app
@@ -56,7 +56,11 @@ from localforge.storage.repositories import (
     RecordRepository,
     RequestSampleRepository,
 )
-from localforge.worker.execution import execute_run
+from localforge.worker.execution import (
+    _localai_fingerprint_config,
+    _sanitize_runtime_fingerprint_snapshot,
+    execute_run,
+)
 
 
 @pytest.fixture
@@ -960,7 +964,52 @@ def test_run_start_persists_safe_engine_and_machine_profile_snapshots(tmp_path) 
         }:
             time.sleep(0.05)
             current = client.get(f"/api/v1/runs/{run_id}").json()
-        assert current["profile_snapshot"] == snapshot
+        persisted_snapshot = current["profile_snapshot"]
+        assert persisted_snapshot["engine"] == snapshot["engine"]
+        assert persisted_snapshot["machine"] == snapshot["machine"]
+        assert persisted_snapshot["machine_profile_id"] == snapshot["machine_profile_id"]
+        assert persisted_snapshot["runtime_fingerprint"]["adapter_id"] == "localforge.fake"
+        assert persisted_snapshot["runtime_fingerprint"]["stack_layers"] == []
+
+
+def test_localai_fingerprint_uses_run_model_when_saved_model_id_is_blank() -> None:
+    engine = EngineProfile(
+        label="LocalAI",
+        adapter_id="localforge.localai",
+        integration_mode=EngineIntegrationMode.ATTACHED_ENDPOINT,
+        endpoint_url="http://127.0.0.1:8080",
+        engine_extensions={"localai": {"model_id": "", "discover_backend": True}},
+    )
+    config = AdapterConfiguration(
+        integration_mode=EngineIntegrationMode.ATTACHED_ENDPOINT,
+        values={
+            "endpoint_url": "http://127.0.0.1:8080",
+            "engine_extensions": {"localai": {"model_id": "", "discover_backend": True}},
+        },
+    )
+
+    updated = _localai_fingerprint_config(engine, config, "run-selected-model")
+
+    assert updated.values["engine_extensions"]["localai"]["model_id"] == "run-selected-model"
+
+
+def test_runtime_fingerprint_snapshot_omits_endpoint_paths_recursively() -> None:
+    snapshot = _sanitize_runtime_fingerprint_snapshot(
+        {
+            "settings": {
+                "localai": {
+                    "endpoint_host": "127.0.0.1",
+                    "endpoint_path": "/proxy/private-token/v1",
+                }
+            },
+            "metadata": [{"ENDPOINT_PATH": "/nested/private-token"}],
+        }
+    )
+
+    assert snapshot == {
+        "settings": {"localai": {"endpoint_host": "127.0.0.1"}},
+        "metadata": [{}],
+    }
 
 
 def test_run_api_executes_in_child_process_and_replays_sanitized_events(tmp_path) -> None:
