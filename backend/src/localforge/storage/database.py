@@ -1,11 +1,13 @@
 """SQLite connections and forward-only schema migrations."""
 
+import os
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 Migration = Callable[[sqlite3.Connection], None]
+DATABASE_BUSY_TIMEOUT_MS = 5000
 
 
 class UnsupportedSchemaVersion(RuntimeError):
@@ -219,18 +221,50 @@ def open_database(database_path: Path) -> sqlite3.Connection:
     """Open a local SQLite database with bounded lock waits and safe defaults."""
 
     database_path.parent.mkdir(parents=True, exist_ok=True)
+    database_sidecars = tuple(
+        Path(f"{database_path}{suffix}") for suffix in ("-wal", "-shm", "-journal")
+    )
+    if any(
+        candidate.is_symlink() or candidate.is_junction()
+        for candidate in (database_path, *database_sidecars)
+    ):
+        raise ValueError("the LOCALFORGE database and sidecar files cannot be links")
+    if os.name == "posix":
+        # The database can contain opted-in prompts and outputs; existing profiles may also
+        # contain private endpoint metadata. Create it privately before SQLite opens it.
+        if not database_path.exists():
+            try:
+                descriptor = os.open(
+                    database_path,
+                    os.O_CREAT | os.O_EXCL | os.O_RDWR,
+                    0o600,
+                )
+            except FileExistsError:
+                pass
+            else:
+                os.close(descriptor)
+        if database_path.exists():
+            database_path.chmod(0o600)
     # Each connection is request-scoped; async routes may resume it on the event-loop thread
     # after FastAPI created it in a synchronous dependency worker thread.
     connection = sqlite3.connect(
         database_path,
-        timeout=5.0,
+        timeout=DATABASE_BUSY_TIMEOUT_MS / 1000,
         isolation_level=None,
         check_same_thread=False,
     )
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute(f"PRAGMA busy_timeout = {DATABASE_BUSY_TIMEOUT_MS}")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        if os.name == "posix":
+            for sidecar in (Path(f"{database_path}-wal"), Path(f"{database_path}-shm")):
+                if sidecar.exists():
+                    sidecar.chmod(0o600)
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 

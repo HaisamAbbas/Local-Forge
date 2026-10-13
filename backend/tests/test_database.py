@@ -1,6 +1,8 @@
 """Database initialization, repeat-startup, and schema-version tests."""
 
+import os
 import sqlite3
+import stat
 from uuid import uuid4
 
 import pytest
@@ -150,3 +152,82 @@ def test_newer_database_schema_fails_without_downgrade(tmp_path) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 99
+
+
+def test_database_busy_wait_is_bounded_and_recovers(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "busy.sqlite3"
+    initialize_database(database_path)
+    monkeypatch.setattr(database, "DATABASE_BUSY_TIMEOUT_MS", 20)
+    first = database.open_database(database_path)
+    second = database.open_database(database_path)
+    try:
+        first.execute("BEGIN IMMEDIATE")
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            second.execute("BEGIN IMMEDIATE")
+        first.rollback()
+        with database.transaction(second):
+            second.execute("INSERT INTO app_metadata (key, value) VALUES ('recovered', 'yes')")
+        assert (
+            second.execute("SELECT value FROM app_metadata WHERE key = 'recovered'").fetchone()[0]
+            == "yes"
+        )
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes are not portable to Windows")
+def test_database_file_is_created_with_private_permissions(tmp_path) -> None:
+    database_path = tmp_path / "private.sqlite3"
+    connection = database.open_database(database_path)
+    try:
+        connection.execute("CREATE TABLE private_content (value TEXT)")
+        assert stat.S_IMODE(database_path.stat().st_mode) == 0o600
+        wal_path = database_path.with_name(f"{database_path.name}-wal")
+        if wal_path.exists():
+            assert stat.S_IMODE(wal_path.stat().st_mode) == 0o600
+    finally:
+        connection.close()
+
+
+def test_database_path_cannot_be_redirected_through_a_link(tmp_path) -> None:
+    target = tmp_path / "target.sqlite3"
+    with sqlite3.connect(target) as connection:
+        connection.execute("CREATE TABLE sentinel (value TEXT)")
+    linked_path = tmp_path / "localforge.sqlite3"
+    try:
+        linked_path.symlink_to(target)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"file symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="database and sidecar files cannot be links"):
+        database.open_database(linked_path)
+
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name='sentinel'").fetchone()
+
+
+def test_database_sidecar_cannot_be_redirected_through_a_link(tmp_path) -> None:
+    outside = tmp_path / "outside-wal"
+    outside.write_bytes(b"unmodified")
+    database_path = tmp_path / "localforge.sqlite3"
+    sidecar_path = tmp_path / "localforge.sqlite3-wal"
+    try:
+        sidecar_path.symlink_to(outside)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"file symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="database and sidecar files cannot be links"):
+        database.open_database(database_path)
+    assert outside.read_bytes() == b"unmodified"
+
+
+def test_corrupt_database_fails_without_repairing_or_replacing_the_file(tmp_path) -> None:
+    database_path = tmp_path / "corrupt.sqlite3"
+    original_bytes = b"preserve this damaged user database"
+    database_path.write_bytes(original_bytes)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        initialize_database(database_path)
+
+    assert database_path.read_bytes() == original_bytes
