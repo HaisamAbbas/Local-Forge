@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0–15C are implemented and verified; Prompt 16 is next.
+**Status:** Prompts 0 through 16 are implemented and verified; Prompt 17 is next.
 **Reviewed:** 13 October 2026
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -113,7 +113,7 @@ Follow the prompt pack in one conversation and the same workspace. Prompt 0 is c
 
 Prompts 15A–15C expand the ecosystem after the MVP adapters and are performed in that order. Before each real connector, check its current official documentation and record the tested version. A catalog entry alone is not a claim of working support.
 
-Prompts 0–15C are complete. Prompt 16 is next.
+Prompts 0 through 16 are complete. Prompt 17 is next.
 
 ## First usable vertical slice
 
@@ -700,4 +700,58 @@ Backend, from `backend/`:
 - `uv run ruff check src tests` - passed.
 - `uv run mypy src/localforge` - passed (57 source files).
 - `uv run pytest` - passed (242 tests; 5 opt-in live tests skipped).
+- `git diff --check` - passed.
+
+## Prompt 16 completion record
+
+### Delivered
+
+- Audited all 19 intended ecosystem entries against spec section 5 and included all 20 registered
+  manifests, including the deterministic fake fixture, in `docs/connector-support-matrix.md`.
+- Added exact adapter IDs, implementation states, integration modes, LOCALFORGE host OS values,
+  `version_tested` evidence, official documentation links, and scope limits to the matrix. Added an
+  automated backend test that compares each field with the live manifest catalog and pins the
+  intended adapter ID set.
+- Added `docs/adapter-authoring.md` with manifest and capability semantics, contract/fixture test
+  patterns, version evidence requirements, documentation and release status guidance, and privacy
+  expectations. Linked the guide and complete matrix from `README.md`.
+- Changed the catalog UI to distinguish implemented, planned, attach, managed, library, and
+  composed modes; label local fixture contract validation separately from upstream release
+  evidence; show LOCALFORGE host OS and each adapter's documentation link. Engine profiles now
+  identify a configured endpoint as local or remote.
+- Added a schema-driven profile form for generic adapter extension settings and local library
+  pipelines, including existing model path, optional Python executable, device, and bounded
+  timeout inputs. Library settings persist in the adapter namespace and reach the isolated worker;
+  timeout values are read from that namespace as well.
+- Recorded fixture evidence for llama.cpp and Ollama and declared the missing host OS values for
+  Ollama and the generic OpenAI-compatible endpoint. Planned Triton and ExLlamaV3 remain
+  non-callable catalog entries.
+
+### Scope and limitations
+
+- Fixture versions are synthetic local responses and do not claim upstream release compatibility.
+  No new live engine, model, package build, or accelerator was tested.
+- Ollama remains attach-only. The llama.cpp adapter supports attached and explicitly managed local
+  process modes. All other ecosystem modes and the planned status remain as declared in the matrix.
+- The generic schema form supports manifest fields of string, number, integer, boolean, or enum
+  types. Adapter settings remain in extension storage; benchmark storage was not changed.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run ruff format --check src tests` - passed (89 files).
+- `uv run ruff check src tests` - passed.
+- `uv run mypy src` - passed (57 source files).
+- `uv run pytest -q` - passed (244 tests; 5 opt-in live tests skipped).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` - passed.
+- `npm run lint` - passed.
+- `npm run typecheck` - passed.
+- `npm run test -- --reporter=dot` - passed (34 tests).
+- `npm run build` - passed.
+- `npm run e2e` - passed (6 Chromium tests using isolated local API and UI ports).
+
 - `git diff --check` - passed.
