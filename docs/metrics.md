@@ -64,6 +64,22 @@ flagged and do not produce a numeric delta.
 Native definitions can differ between engines, so native and client metrics must not be merged into
 one unlabeled series.
 
+## Local resource samples
+
+The isolated benchmark worker records best-effort operating-system observations with source
+`system_observed`, aggregation `sample`, and method version
+`localforge.resource_sampler.v1`. It samples host CPU utilization, host memory utilization and
+available bytes, and the LOCALFORGE worker process CPU utilization and resident memory (RSS).
+Memory and RSS values are point-in-time readings. CPU percentages cover the interval since the
+previous sample; `interval_seconds` records that interval. Worker CPU is expressed as a percentage
+of one logical CPU and can exceed 100% when it uses multiple cores.
+
+Metric labels distinguish `scope=local_host` from `scope=benchmark_worker`. Host readings describe
+the whole machine running LOCALFORGE. Worker readings describe only LOCALFORGE's isolated
+benchmark process. Neither scope measures an attached engine process, a remote host, GPU usage, or
+power consumption. Sampling runs at one-second intervals while the worker is active and records a
+final sample when available. Sampling failures remain unavailable and are not represented as zero.
+
 Derived records are available at `GET /api/v1/runs/{run_id}/metrics`; request records are available
 at `GET /api/v1/runs/{run_id}/samples`. The samples plus each metric's formula and method version
 provide the inputs needed to reproduce the run summary. The built-in fake adapter is for exercising

@@ -606,6 +606,82 @@ Backend, from `backend/`:
 
 No frontend files were changed for this prompt.
 
+## Prompt 18 completion record
+
+### Delivered
+
+- Added a ten-step Playwright release workflow using only LOCALFORGE's deterministic fake engine.
+  It covers local privacy disclosure, machine-information unknowns, adapter registration and probe,
+  local dataset and plan setup, preflight, live run state and measurements, safe cancellation, run
+  details, two-run comparison, and provenance and secret removal in a report.
+- Added a best-effort worker resource sampler. It persists and streams host CPU/memory and
+  LOCALFORGE worker CPU/RSS observations with `system_observed` source, scope labels, formulas,
+  units, sample intervals, and method version. The run detail can report their availability without
+  presenting unavailable values as zero. Documented the scopes and limits in `docs/metrics.md`.
+- Strengthened the zero-retention integration assertion to cover both prompt and output bodies and
+  the explicit `content_retained=false` field.
+- Confirmed separate tests cover API restart/reconnect, worker interruption recovery, remote
+  endpoint disclosure before any adapter request, report secret redaction, and the adapter contract
+  suite. The complete backend suite exercises these in the normal release gate.
+
+### Global definition of done evidence
+
+1. Local operation and privacy behavior are exercised in the release E2E flow and documented in
+   the README.
+2. System inspection and unknown/unverified values are checked in the release E2E flow.
+3. Fake engine registration, probing, and profile setup are checked in the browser and adapter
+   contract suites; support declarations are validated against the support matrix.
+4. Workload/dataset import and passing preflight are checked in the release E2E flow.
+5. The fake-engine benchmark completes without a model, GPU, or public endpoint in Playwright and
+   backend integration tests.
+6. Live state, request outcomes, latency, throughput, available host/worker resource observations,
+   formulas, and metric sources are checked in the browser flow and persisted-metric integration
+   test.
+7. Cancellation is checked in the browser; restart, worker death, and incomplete request recovery
+   are checked in backend tests.
+8. The browser flow runs a controlled comparison and checks its declared-change explanation.
+9. The browser flow exports a provenance report and checks redaction of an API-key-like sentinel.
+10. The ten-step browser flow passes using local services and the deterministic fake adapter.
+11. Backend/frontend format, lint, type, unit/integration, adapter-contract, build, E2E, and
+    configured security checks were completed as listed below.
+12. README setup and support documentation plus the connector matrix were checked by the release
+    workflow and automated support-matrix assertions.
+
+### Scope and limitations
+
+- Resource samples describe the LOCALFORGE host and isolated worker only. They do not measure an
+  attached or remote engine process, GPU usage, or power. OS sampling is best-effort; failure is
+  explicit and never converted to zero.
+- Real engines and public endpoints were not contacted. Five opt-in live-engine checks remain
+  skipped. Windows does not permit the current account to create file symlinks, so three path
+  regression tests and one POSIX-permission test are skipped on this host.
+- Frontend dependency installation and browser tests ran in a fresh temporary frontend copy because
+  the existing local Vite process held a native dependency file open in the repository's
+  `node_modules`. The clean install reported zero npm vulnerabilities. The repository does not
+  configure a Python dependency vulnerability scanner.
+
+### Checks run
+
+From a clean temporary backend copy after `uv sync --locked`:
+
+- `uv run --locked ruff format --check src tests` - passed (90 files).
+- `uv run --locked ruff check src tests` - passed.
+- `uv run --locked mypy src` - passed (57 source files).
+- `uv run --locked pytest` - passed (257 passed, 9 skipped).
+- `uv run --locked localforge-worker --check` - passed (`status=ready`, protocol version 1).
+- `uv lock --check --offline` - passed; 45 packages resolved.
+
+From a clean temporary frontend copy after `npm ci` and `npx playwright install chromium`:
+
+- `npm run format:check` - passed.
+- `npm run lint` - passed.
+- `npm run typecheck` - passed.
+- `npm run test -- --reporter=dot` - passed (34 tests).
+- `npm run build` - passed.
+- `npm run e2e` - passed (7 Chromium tests).
+
+- `git diff --check` - passed.
+
 ## Prompt 15B completion record
 
 ### Delivered
