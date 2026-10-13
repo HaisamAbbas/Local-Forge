@@ -2,5 +2,12 @@
 
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
 from localforge.adapters.fake import FakeEngineAdapter, FakeEngineScenario
+from localforge.adapters.openai_compatible import OpenAICompatibleEngineAdapter
 
-__all__ = ["AdapterCatalog", "FakeEngineAdapter", "FakeEngineScenario", "default_adapter_catalog"]
+__all__ = [
+    "AdapterCatalog",
+    "FakeEngineAdapter",
+    "FakeEngineScenario",
+    "OpenAICompatibleEngineAdapter",
+    "default_adapter_catalog",
+]

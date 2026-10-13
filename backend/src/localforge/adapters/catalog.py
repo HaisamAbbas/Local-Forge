@@ -188,10 +188,12 @@ class AdapterCatalog:
 
 
 def default_adapter_catalog() -> AdapterCatalog:
-    """Build the ordinary local catalog without network or model dependencies."""
+    """Build the local catalog with a deterministic fixture and an on-demand endpoint adapter."""
 
     from localforge.adapters.fake import FakeEngineAdapter
+    from localforge.adapters.openai_compatible import OpenAICompatibleEngineAdapter
 
     catalog = AdapterCatalog()
     catalog.register(FakeEngineAdapter())
+    catalog.register(OpenAICompatibleEngineAdapter())
     return catalog

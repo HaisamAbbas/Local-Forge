@@ -46,8 +46,8 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     catalog = default_adapter_catalog()
     manifests = catalog.list_manifests()
 
-    assert len(manifests) == 1
-    manifest = manifests[0]
+    assert len(manifests) == 2
+    manifest = next(item for item in manifests if item.adapter_id == FAKE_ADAPTER_ID)
     assert isinstance(manifest, AdapterManifest)
     assert manifest.adapter_id == FAKE_ADAPTER_ID
     assert manifest.adapter_version == "1.0.0"
@@ -56,6 +56,11 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
         EngineIntegrationMode.MANAGED_PROCESS,
     ]
     assert "streaming" in manifest.declared_capabilities
+    compatible = next(
+        item for item in manifests if item.adapter_id == "localforge.openai_compatible"
+    )
+    assert compatible.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+    assert "managed_process" not in compatible.declared_capabilities
 
     with pytest.raises(ValidationError, match="adapter_id"):
         AdapterManifest.model_validate(

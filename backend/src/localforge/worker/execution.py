@@ -215,6 +215,8 @@ def _adapter_config(engine: EngineProfile) -> AdapterConfiguration:
         values["health_route"] = engine.health_route
     if engine.models_route is not None:
         values["models_route"] = engine.models_route
+    if engine.engine_extensions:
+        values["engine_extensions"] = cast(JsonValue, engine.engine_extensions)
     return AdapterConfiguration(
         integration_mode=engine.integration_mode,
         values=values,

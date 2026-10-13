@@ -105,6 +105,7 @@ class EngineProfileView(SchemaModel):
     machine_profile_id: UUID | None
     selected_model_ref: str | None
     user_notes: str | None
+    engine_extensions: dict[str, dict[str, JsonValue]]
     configured_fields: list[str]
     credential_configured: bool
     created_at: datetime

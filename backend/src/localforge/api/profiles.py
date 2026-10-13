@@ -37,6 +37,7 @@ from localforge.core.models import (
     EngineProfile,
     EngineProfileStatus,
     FieldProvenance,
+    JsonValue,
     MachineProfile,
     MachineProfileStatus,
     ModelArtifact,
@@ -100,6 +101,7 @@ def _engine_profile_view(
         machine_profile_id=profile.machine_profile_id,
         selected_model_ref=profile.selected_model_ref,
         user_notes=profile.user_notes,
+        engine_extensions=profile.engine_extensions,
         configured_fields=sorted(profile.config),
         credential_configured=bool(profile.secret_refs),
         created_at=profile.created_at,
@@ -428,6 +430,7 @@ def update_engine_profile(
             "integration_mode",
             "config",
             "secret_refs",
+            "engine_extensions",
         }
     )
     if invalidates_probe:
@@ -481,8 +484,9 @@ async def probe_engine_profile(
         disclosure = RemoteEgressDisclosure(
             host=hostname,
             message=(
-                f"This profile targets remote host {hostname}. Future benchmark prompts and model "
-                "requests will leave this machine. Confirm remote use before probing this target."
+                f"This profile targets remote host {hostname}. Probing may send a minimal chat "
+                "completion check. Benchmark prompts and requests will leave this machine. "
+                "Confirm remote use before contacting this target."
             ),
         )
         raise HTTPException(status_code=409, detail=disclosure.model_dump(mode="json"))
@@ -501,6 +505,8 @@ async def probe_engine_profile(
         values["health_route"] = profile.health_route
     if profile.models_route is not None:
         values["models_route"] = profile.models_route
+    if profile.engine_extensions:
+        values["engine_extensions"] = cast(JsonValue, profile.engine_extensions)
     config = AdapterConfiguration(
         integration_mode=profile.integration_mode,
         values=values,
