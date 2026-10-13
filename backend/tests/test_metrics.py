@@ -539,3 +539,44 @@ def test_native_counter_delta_rejects_duplicate_names_and_source_mismatch() -> N
     assert "duplicate_metric_name" in rows["engine.duplicate"].quality_flags
     assert rows["engine.wrong_source"].value is None
     assert "source_mismatch" in rows["engine.wrong_source"].quality_flags
+
+
+def test_native_counter_delta_tracks_labeled_prometheus_series_independently() -> None:
+    def native(value: float, position: str) -> AdapterMetric:
+        return AdapterMetric(
+            metric_name="engine.accepted_tokens_total",
+            value=value,
+            unit="tokens",
+            source=MetricSource.ENGINE_NATIVE,
+            kind="counter",
+            labels={"position": position},
+        )
+
+    before = [native(4, "0"), native(9, "1")]
+    after = [native(7, "0"), native(15, "1")]
+    raw = native_metric_snapshot_samples(
+        RUN_ID,
+        before,
+        expected_names={"engine.accepted_tokens_total"},
+        stage="before",
+        adapter_id="test.adapter",
+        adapter_version="1.2",
+        engine_version="engine-x",
+    )
+    evaluation = evaluate_native_metric_snapshots(
+        RUN_ID,
+        before,
+        after,
+        expected_names={"engine.accepted_tokens_total"},
+        adapter_id="test.adapter",
+        adapter_version="1.2",
+        engine_version="engine-x",
+    )
+
+    assert not any(code == "native_metric_duplicate" for code, _ in raw.warnings)
+    assert {row.labels["position"] for row in raw.samples} == {"0", "1"}
+    assert not evaluation.warnings
+    assert {(row.labels["position"], row.value) for row in evaluation.samples} == {
+        ("0", 3),
+        ("1", 6),
+    }

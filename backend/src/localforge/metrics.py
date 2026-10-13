@@ -139,15 +139,21 @@ def native_metric_snapshot_samples(
 
     rows: list[MetricSample] = []
     warnings: list[tuple[str, str]] = []
-    seen: set[str] = set()
+    seen_names: set[str] = set()
+    seen_series: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
     for metric in metrics or ():
         flags: list[str] = []
-        if metric.metric_name in seen:
+        series_key = (metric.metric_name, tuple(sorted(metric.labels.items())))
+        if series_key in seen_series:
             flags.append("duplicate_metric_name")
             warnings.append(
-                ("native_metric_duplicate", f"{metric.metric_name} was reported more than once.")
+                (
+                    "native_metric_duplicate",
+                    f"{metric.metric_name} with the same labels was reported more than once.",
+                )
             )
-        seen.add(metric.metric_name)
+        seen_names.add(metric.metric_name)
+        seen_series.add(series_key)
         if metric.kind == "counter" and metric.value < 0:
             flags.append("invalid_negative_counter")
             warnings.append(
@@ -181,7 +187,7 @@ def native_metric_snapshot_samples(
                 engine_version=engine_version,
             )
         )
-    for name in sorted(set(expected_names) - seen):
+    for name in sorted(set(expected_names) - seen_names):
         warnings.append(("native_metric_missing", f"{name} was missing from the {stage} snapshot."))
         rows.append(
             _metric(
@@ -721,22 +727,31 @@ def evaluate_native_metric_snapshots(
     warnings: list[tuple[str, str]] = []
     rows: list[MetricSample] = []
     by_stage = {"before": before or (), "after": after or ()}
-    indexed: dict[str, dict[str, AdapterMetric]] = {}
-    duplicate_names: set[str] = set()
+    MetricKey = tuple[str, tuple[tuple[str, str], ...]]
+    indexed: dict[str, dict[MetricKey, AdapterMetric]] = {}
+    duplicate_series: set[tuple[str, MetricKey]] = set()
     for stage, metrics in by_stage.items():
         indexed[stage] = {}
         for metric in metrics:
-            if metric.metric_name in indexed[stage]:
-                duplicate_names.add(metric.metric_name)
-            indexed[stage][metric.metric_name] = metric
-    names = set(indexed["before"]) | set(indexed["after"]) | set(expected_names)
+            key = (metric.metric_name, tuple(sorted(metric.labels.items())))
+            if key in indexed[stage]:
+                duplicate_series.add((stage, key))
+            indexed[stage][key] = metric
+    keys = set(indexed["before"]) | set(indexed["after"])
+    present_names = {key[0] for key in keys}
+    keys.update((name, ()) for name in set(expected_names) - present_names)
 
-    for name in sorted(names):
-        first = indexed["before"].get(name)
-        last = indexed["after"].get(name)
-        if name in duplicate_names:
+    for key in sorted(keys):
+        name, label_pairs = key
+        labels = dict(label_pairs)
+        first = indexed["before"].get(key)
+        last = indexed["after"].get(key)
+        if ("before", key) in duplicate_series or ("after", key) in duplicate_series:
             warnings.append(
-                ("native_metric_duplicate", f"{name} was reported more than once in a snapshot.")
+                (
+                    "native_metric_duplicate",
+                    f"{name} with labels {labels} was reported more than once in a snapshot.",
+                )
             )
             observed = last or first
             rows.append(
@@ -752,6 +767,7 @@ def evaluate_native_metric_snapshots(
                     formula="unavailable: a snapshot contains duplicate metric names",
                     quality_flags=["duplicate_metric_name"],
                     metric_kind=observed.kind if observed is not None else "gauge",
+                    labels=labels,
                     adapter_id=adapter_id,
                     adapter_version=adapter_version,
                     engine_version=engine_version,
@@ -779,6 +795,7 @@ def evaluate_native_metric_snapshots(
                     formula="unavailable: a before or after observation is missing",
                     quality_flags=["missing_native_metric", f"missing_{missing_stage}_snapshot"],
                     metric_kind=observed.kind if observed is not None else "gauge",
+                    labels=labels,
                     adapter_id=adapter_id,
                     adapter_version=adapter_version,
                     engine_version=engine_version,
@@ -806,6 +823,7 @@ def evaluate_native_metric_snapshots(
                     adapter_version=adapter_version,
                     engine_version=engine_version,
                     labels={
+                        **labels,
                         "before_source": first.source.value,
                         "after_source": last.source.value,
                     },
@@ -832,7 +850,7 @@ def evaluate_native_metric_snapshots(
                     adapter_id=adapter_id,
                     adapter_version=adapter_version,
                     engine_version=engine_version,
-                    labels={"before_unit": first.unit, "after_unit": last.unit},
+                    labels={**labels, "before_unit": first.unit, "after_unit": last.unit},
                 )
             )
             continue
@@ -851,6 +869,7 @@ def evaluate_native_metric_snapshots(
                     formula="unavailable: metric kind changed between snapshots",
                     quality_flags=["metric_kind_mismatch"],
                     metric_kind=first.kind,
+                    labels=labels,
                     adapter_id=adapter_id,
                     adapter_version=adapter_version,
                     engine_version=engine_version,
@@ -882,6 +901,7 @@ def evaluate_native_metric_snapshots(
                     formula="after counter - before counter",
                     quality_flags=flags,
                     metric_kind="counter",
+                    labels=labels,
                     adapter_id=adapter_id,
                     adapter_version=adapter_version,
                     engine_version=engine_version,
