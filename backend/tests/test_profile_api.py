@@ -21,6 +21,7 @@ from localforge.adapters.llama_cpp import LLAMA_CPP_ADAPTER_ID, LlamaCppEngineAd
 from localforge.api.dependencies import engine_profile_mutation_lock
 from localforge.api.main import AppSettings, create_app
 from localforge.core.models import EngineProfile, EngineProfileStatus
+from localforge.security.local_session import local_session_token_matches
 from localforge.storage.database import open_database
 from localforge.storage.repositories import RecordRepository
 
@@ -109,6 +110,13 @@ def test_engine_profile_mutation_lock_serializes_same_profile_operations() -> No
 def test_mutations_require_a_local_session_and_reject_foreign_origins(tmp_path) -> None:
     client, _, _, _ = _client(tmp_path)
     with client:
+        cross_origin_session = client.get(
+            "/api/v1/session",
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert cross_origin_session.status_code == 200
+        assert "access-control-allow-origin" not in cross_origin_session.headers
+
         denied_without_token = client.post(
             "/api/v1/machine-profiles",
             json={"label": "Remote target"},
@@ -124,6 +132,39 @@ def test_mutations_require_a_local_session_and_reject_foreign_origins(tmp_path) 
         )
         assert denied_foreign_origin.status_code == 403
         assert denied_foreign_origin.json()["detail"]["code"] == "origin_rejected"
+
+
+def test_every_mutation_family_requires_a_local_session_and_loopback_host(tmp_path) -> None:
+    client, _, _, _ = _client(tmp_path)
+    mutation_requests = (
+        ("POST", "/api/v1/datasets/import"),
+        ("POST", "/api/v1/workloads"),
+        ("POST", "/api/v1/runs"),
+        ("POST", "/api/v1/experiments"),
+        ("POST", "/api/v1/reports"),
+        ("PUT", "/api/v1/machine-profiles/current"),
+        ("PATCH", f"/api/v1/engines/{UUID(int=1)}"),
+        ("DELETE", f"/api/v1/engines/{UUID(int=1)}"),
+    )
+    with client:
+        for method, path in mutation_requests:
+            response = client.request(method, path)
+            assert response.status_code == 403, (method, path, response.text)
+            assert response.json()["detail"]["code"] == "local_session_required"
+
+        _authorize_mutations(client)
+        denied_foreign_host = client.post(
+            "/api/v1/workloads",
+            headers={"Host": "attacker.example"},
+            json={},
+        )
+        assert denied_foreign_host.status_code == 403
+        assert denied_foreign_host.json()["detail"]["code"] == "loopback_only"
+
+
+def test_session_token_comparison_rejects_non_ascii_values_without_error() -> None:
+    assert local_session_token_matches("é", "valid-ascii-token") is False
+    assert local_session_token_matches("valid-ascii-token", "valid-ascii-token") is True
 
 
 def test_system_endpoint_and_manual_machine_profiles_keep_provenance(tmp_path) -> None:

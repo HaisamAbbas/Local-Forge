@@ -9,7 +9,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from secrets import compare_digest
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
@@ -40,6 +39,7 @@ from localforge.security.local_session import (
     create_local_session_token,
     is_loopback_origin,
     is_loopback_request_host,
+    local_session_token_matches,
 )
 from localforge.storage.database import initialize_database, open_database
 from localforge.storage.paths import default_data_directory
@@ -279,7 +279,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 )
             supplied_token = request.headers.get(SESSION_HEADER_NAME.lower(), "")
             expected_token = cast(str, request.app.state.local_session_token)
-            if not compare_digest(supplied_token, expected_token):
+            if not local_session_token_matches(supplied_token, expected_token):
                 return JSONResponse(
                     status_code=403,
                     content={

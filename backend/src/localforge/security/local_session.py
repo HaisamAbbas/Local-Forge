@@ -2,6 +2,7 @@
 
 import ipaddress
 import secrets
+from secrets import compare_digest
 from urllib.parse import urlsplit
 
 from localforge.core.urls import is_loopback_host
@@ -13,6 +14,17 @@ def create_local_session_token() -> str:
     """Return a high-entropy token that exists only for the current API process."""
 
     return secrets.token_urlsafe(32)
+
+
+def local_session_token_matches(supplied: str, expected: str) -> bool:
+    """Compare arbitrary header bytes safely without leaking timing information."""
+
+    try:
+        supplied_bytes = supplied.encode("latin-1")
+        expected_bytes = expected.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return compare_digest(supplied_bytes, expected_bytes)
 
 
 def is_loopback_origin(origin: str) -> bool:
