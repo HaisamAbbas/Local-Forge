@@ -75,6 +75,13 @@ def test_unknown_capability_is_preserved_and_engine_extensions_are_namespaced() 
             integration_mode="attached_endpoint",
             engine_extensions={"Fake Adapter": {"field": "value"}},
         )
+    with pytest.raises(ValidationError, match="cannot store credentials"):
+        EngineProfile(
+            label="Credential in extension",
+            adapter_id="fake",
+            integration_mode="attached_endpoint",
+            engine_extensions={"fake.adapter": {"authorization_token": "must-not-persist"}},
+        )
     with pytest.raises(ValidationError, match="secret references"):
         EngineProfile(
             label="Unsafe config",
@@ -88,6 +95,17 @@ def test_unknown_capability_is_preserved_and_engine_extensions_are_namespaced() 
             adapter_id="fake",
             integration_mode="attached_endpoint",
             config={"api_token": "plaintext"},
+        )
+
+
+@pytest.mark.parametrize("field", ["accessToken", "privateKey", "clientSecret"])
+def test_engine_extensions_reject_camel_case_credential_fields(field: str) -> None:
+    with pytest.raises(ValidationError, match="cannot store credentials"):
+        EngineProfile(
+            label="Credential in extension",
+            adapter_id="fake",
+            integration_mode="attached_endpoint",
+            engine_extensions={"fake.adapter": {field: "must-not-persist"}},
         )
 
 

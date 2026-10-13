@@ -64,6 +64,49 @@ class EngineSpecificDomainModel(DomainModel):
         ]
         if invalid:
             raise ValueError("engine extension keys must use a lowercase namespace")
+
+        secret_names = {
+            "authorization",
+            "apikey",
+            "password",
+            "secret",
+            "token",
+            "credential",
+            "credentials",
+        }
+
+        def has_secret_key(item: JsonValue) -> bool:
+            if isinstance(item, dict):
+                for key, nested in item.items():
+                    normalized = re.sub(r"[^a-z0-9]", "", key.casefold())
+                    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
+                    parts = set(re.findall(r"[a-z0-9]+", separated.casefold()))
+                    sensitive_parts = parts.intersection(
+                        {
+                            "authorization",
+                            "password",
+                            "secret",
+                            "token",
+                            "credential",
+                            "credentials",
+                        }
+                    )
+                    if (
+                        normalized in secret_names
+                        or sensitive_parts
+                        or {"api", "key"}.issubset(parts)
+                        or {"auth", "key"}.issubset(parts)
+                        or {"access", "key"}.issubset(parts)
+                        or {"private", "key"}.issubset(parts)
+                        or has_secret_key(nested)
+                    ):
+                        return True
+            if isinstance(item, list):
+                return any(has_secret_key(nested) for nested in item)
+            return False
+
+        if any(has_secret_key(extension) for extension in value.values()):
+            raise ValueError("engine extensions cannot store credentials; use secret references")
         return value
 
 
