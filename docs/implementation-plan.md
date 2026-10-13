@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-15B are implemented and verified; Prompt 15C is next.
+**Status:** Prompts 0–15C are implemented and verified; Prompt 16 is next.
 **Reviewed:** 13 October 2026
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -113,7 +113,7 @@ Follow the prompt pack in one conversation and the same workspace. Prompt 0 is c
 
 Prompts 15A–15C expand the ecosystem after the MVP adapters and are performed in that order. Before each real connector, check its current official documentation and record the tested version. A catalog entry alone is not a claim of working support.
 
-Prompts 0–15B are complete. Prompt 15C is next.
+Prompts 0–15C are complete. Prompt 16 is next.
 
 ## First usable vertical slice
 
@@ -659,3 +659,45 @@ Frontend, from `frontend/`:
 - `npm run format:check` - passed.
 
 Repository diff check: `git diff --check` - passed.
+
+## Prompt 15C completion record
+
+### Delivered
+
+- Added attach-only connectors for MLX-LM, MLC LLM, and mistral.rs. Their server-side platform,
+  route, authentication, version, and native-metric limits are recorded in the connector matrix.
+  MLX-LM can be attached to from any supported LOCALFORGE host; the MLX-LM endpoint itself must
+  run on Apple silicon macOS.
+- Added isolated library-pipeline adapters for OpenVINO GenAI and ONNX Runtime GenAI. Model code
+  runs in a separate Python process with bounded JSON Lines IPC, startup/request timeouts, output
+  limits, crash cleanup, and restart recovery. Users select an existing Python executable and local
+  model path; LOCALFORGE does not install packages or fetch models. Successful local probes report
+  installed runtime package versions when package metadata is available, and ONNX Runtime GenAI
+  reports its model-selected device.
+- Added NVIDIA Dynamo as an attached composed stack. Frontend metrics remain native and unmerged;
+  worker identities appear only when the frontend exports validated worker-state inventory data.
+  Worker/component and backend metrics remain outside the frontend scrape.
+- Listed ExLlamaV3 as planned because its upstream project is a CUDA-oriented library and its
+  documented HTTP option is a separate project. No callable LOCALFORGE ExLlamaV3 adapter is claimed.
+- Added fixture-backed adapter, IPC failure/recovery, platform, catalog, metrics-topology, and
+  remote-resource-lock tests. Updated the connector matrix with current official documentation,
+  runtime and platform constraints, and the distinction between fixtures and live-tested engines.
+
+### Scope and limitations
+
+- Library-pipeline tests use fixture child processes. No OpenVINO or ONNX model, package build,
+  accelerator, or upstream server was installed or live-tested in standard CI.
+- MLX-LM, MLC LLM, mistral.rs, and Dynamo have no verified server-version route in these adapters,
+  so their server versions remain unknown. Fixture responses are not upstream compatibility claims.
+- ExLlamaV3 remains catalog-only and planned. Dynamo captures frontend metrics and its verified
+  router worker inventory; it does not scrape worker/backend endpoints or infer unreported stacks.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run ruff format --check src tests` - passed (89 files).
+- `uv run ruff check src tests` - passed.
+- `uv run mypy src/localforge` - passed (57 source files).
+- `uv run pytest` - passed (242 tests; 5 opt-in live tests skipped).
+- `git diff --check` - passed.
