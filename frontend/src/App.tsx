@@ -6,7 +6,11 @@ import { WorkloadsScreen } from "./components/WorkloadsScreen";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
 
 const navigation = [
-  { id: "overview", label: "Overview", description: "Your local inference workspace." },
+  {
+    id: "overview",
+    label: "Overview",
+    description: "A live view of your machine, connected engines, and benchmark activity.",
+  },
   {
     id: "engines",
     label: "Engines",
@@ -20,7 +24,7 @@ const navigation = [
   {
     id: "workloads",
     label: "Workloads",
-    description: "Build repeatable request sets and traffic patterns.",
+    description: "Define request patterns to measure an engine under realistic traffic.",
   },
   {
     id: "runs",
@@ -138,7 +142,7 @@ export function App() {
               }}
             />
           ) : (
-            <SectionEmptyState label={currentScreen.label} />
+            <SectionEmptyState screen={activeScreen} />
           )}
         </main>
       </div>
@@ -146,15 +150,43 @@ export function App() {
   );
 }
 
-function SectionEmptyState({ label }: { label: string }) {
+function SectionEmptyState({ screen }: { screen: "experiments" | "learning" }) {
   return (
     <section className="section-empty-state" aria-live="polite">
-      <p className="eyebrow">{label.toUpperCase()}</p>
-      <h2>This section is ready for your workspace.</h2>
-      <p>
-        No sample engines, workloads, runs, or measurements are shown. The next implementation
-        phases will connect this view to your local data.
+      <p className="eyebrow">
+        {screen === "experiments" ? "CONTROLLED COMPARISONS" : "INFERENCE FIELD NOTES"}
       </p>
+      <h2>
+        {screen === "experiments"
+          ? "Compare one change at a time."
+          : "Build intuition from measured results."}
+      </h2>
+      <p>
+        {screen === "experiments"
+          ? "Side-by-side experiment workflows are not available yet. You can still create a repeatable workload and inspect its measured runs."
+          : "Learning guides are not available yet. Start with your machine details, then run a workload to see how your chosen engine responds."}
+      </p>
+      <div className="section-empty-actions">
+        {screen === "experiments" ? (
+          <>
+            <a className="button button--primary" href="#workloads">
+              Open workloads
+            </a>
+            <a className="text-link" href="#runs">
+              View run history
+            </a>
+          </>
+        ) : (
+          <>
+            <a className="button button--primary" href="#system">
+              Inspect this machine
+            </a>
+            <a className="text-link" href="#workloads">
+              Build a workload
+            </a>
+          </>
+        )}
+      </div>
     </section>
   );
 }

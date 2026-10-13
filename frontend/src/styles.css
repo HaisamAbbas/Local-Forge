@@ -4729,3 +4729,188 @@ table td {
     transition: none;
   }
 }
+
+/* Image-led workspace pages share the Engines visual language without reusing its art. */
+.main-content:not(.main-content--engines) {
+  width: 100%;
+  max-width: none;
+  padding: 0 0 58px;
+}
+
+.main-content:not(.main-content--engines) > .page-heading {
+  position: relative;
+  min-height: clamp(330px, 29vw, 420px);
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0;
+  padding: 34px clamp(24px, 5vw, 72px) 32px;
+  overflow: hidden;
+  border-bottom: 1px solid #34382e;
+  background-color: #0b0d0a;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-position: center 52%;
+}
+
+.main-content:not(.main-content--engines) > .page-heading::before {
+  position: absolute;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, rgb(7 9 8 / 75%) 0%, rgb(7 9 8 / 57%) 38%, rgb(7 9 8 / 8%) 100%),
+    linear-gradient(0deg, rgb(7 9 8 / 48%) 0%, rgb(7 9 8 / 5%) 60%, rgb(7 9 8 / 13%) 100%);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+}
+
+.main-content:not(.main-content--engines) > .page-heading > div,
+.main-content:not(.main-content--engines) > .page-heading > .local-badge {
+  position: relative;
+  z-index: 1;
+}
+
+.main-content:not(.main-content--engines) > .page-heading h1 {
+  margin: 9px 0 8px;
+  color: #f7f5ee;
+  font-size: clamp(44px, 5vw, 60px);
+  letter-spacing: -0.055em;
+  text-shadow: 0 2px 18px rgb(0 0 0 / 28%);
+}
+
+.main-content:not(.main-content--engines) > .page-heading .eyebrow {
+  color: #d7d1c2;
+}
+
+.main-content:not(.main-content--engines) > .page-heading .page-description {
+  max-width: 550px;
+  margin: 0;
+  color: #eeece5;
+  font-size: 16px;
+  line-height: 1.55;
+  text-shadow: 0 1px 12px rgb(0 0 0 / 34%);
+}
+
+.main-content:not(.main-content--engines) > .page-heading .local-badge {
+  flex: 0 0 auto;
+  border-color: rgb(204 211 183 / 42%);
+  border-radius: 2px;
+  background: rgb(11 13 10 / 78%);
+  color: #f1f1e9;
+}
+
+.page-heading--overview {
+  background-image: url("/images/localforge-overview-hero.jpg");
+}
+
+.page-heading--system {
+  background-image: url("/images/localforge-system-hero.jpg");
+  background-position: center 56%;
+}
+
+.page-heading--workloads {
+  background-image: url("/images/localforge-workloads-hero.jpg");
+  background-position: center 54%;
+}
+
+.page-heading--runs {
+  background-image: url("/images/localforge-runs-hero.jpg");
+  background-position: center 52%;
+}
+
+.page-heading--experiments {
+  background-image: url("/images/localforge-experiments-hero.jpg");
+  background-position: center 54%;
+}
+
+.page-heading--learning {
+  background-image: url("/images/localforge-learning-hero.jpg");
+  background-position: center 56%;
+}
+
+.main-content:not(.main-content--engines) > .screen-stack,
+.main-content:not(.main-content--engines) > .section-empty-state {
+  width: min(1540px, 100%);
+  margin-right: auto;
+  margin-left: auto;
+  padding: 26px clamp(20px, 2.4vw, 36px) 0;
+}
+
+.main-content:not(.main-content--engines) > .runs-layout {
+  width: min(1540px, 100%);
+  margin: 0 auto;
+  padding: 0 clamp(20px, 2.4vw, 36px);
+}
+
+.main-content:not(.main-content--engines) > .section-empty-state {
+  width: min(1468px, calc(100% - clamp(40px, 4.8vw, 72px)));
+  margin-top: 26px;
+  padding: 24px 28px;
+  border: 1px solid #383c32;
+  border-radius: 3px;
+  background: linear-gradient(110deg, rgb(32 35 28 / 96%), rgb(20 22 18 / 96%)), #171914;
+}
+
+.section-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  margin-top: 22px;
+}
+
+@media (max-width: 900px) {
+  .main-content:not(.main-content--engines) > .page-heading {
+    min-height: 320px;
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+}
+
+@media (max-width: 560px) {
+  .main-content:not(.main-content--engines) {
+    padding: 0 0 36px;
+  }
+
+  .main-content:not(.main-content--engines) > .page-heading {
+    min-height: 270px;
+    align-items: flex-start;
+    padding: 24px 16px 22px;
+    background-position: 58% center;
+  }
+
+  .main-content:not(.main-content--engines) > .page-heading h1 {
+    font-size: 42px;
+  }
+
+  .main-content:not(.main-content--engines) > .page-heading .page-description {
+    max-width: 350px;
+    font-size: 14px;
+  }
+
+  .main-content:not(.main-content--engines) > .page-heading .local-badge {
+    display: none;
+  }
+
+  .main-content:not(.main-content--engines) > .screen-stack,
+  .main-content:not(.main-content--engines) > .runs-layout,
+  .main-content:not(.main-content--engines) > .section-empty-state {
+    padding: 18px 12px 0;
+  }
+
+  .main-content:not(.main-content--engines) > .section-empty-state {
+    width: calc(100% - 24px);
+    margin-top: 18px;
+    padding: 20px 16px;
+  }
+
+  .main-content:not(.main-content--engines) > .runs-layout {
+    padding-top: 18px;
+  }
+
+  .section-empty-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+}
