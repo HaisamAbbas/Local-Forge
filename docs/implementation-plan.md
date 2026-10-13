@@ -1,7 +1,7 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-11 are implemented and verified; Prompt 12 is next.
-**Reviewed:** 12 October 2026  
+**Status:** Prompts 0-14 are implemented and verified; Prompt 15A is next.
+**Reviewed:** 13 October 2026
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
 
@@ -113,7 +113,7 @@ Follow the prompt pack in one conversation and the same workspace. Prompt 0 is c
 
 Prompts 15A–15C expand the ecosystem after the MVP adapters and are performed in that order. Before each real connector, check its current official documentation and record the tested version. A catalog entry alone is not a claim of working support.
 
-Prompts 0–13 are complete. Prompt 14 is next.
+Prompts 0–14 are complete. Prompt 15A is next.
 
 ## First usable vertical slice
 
@@ -510,5 +510,42 @@ Frontend, from `frontend/`:
 - `npm run test` - passed (29 tests).
 - `npm run build` - passed.
 - `npm run e2e` - passed (4 Chromium E2E tests on isolated API/UI ports).
+
+Repository diff check: `git diff --check` - passed.
+
+## Prompt 14 completion record
+
+### Delivered
+
+- Added evidence-backed run comparison grades for hardware, model artifact and tokenizer identity, runtime version, workload settings, traffic pattern, metric definitions and sources, and possible contention. Comparisons list exact differences, include only matching metric definitions, preserve unavailable values, and block causal badges when evidence does not support them.
+- Added experiment groups with preflighted baseline and variant plans, one-change sweeps, repetitions, deterministic randomized order, runtime confirmation, sequential execution, resumable runs, and preserved failed-trial records.
+- Added local JSON, CSV, and Markdown reports with app/schema versions, setup fingerprints, workload snapshots, metric formulas and sources, counts, warnings, errors, comparability, and generated time. Credentials are stripped; retained request text is included only after explicit export selection. Unsafe paths are rejected and failed writes preserve run history.
+- Added workload plan JSON export/import with configuration snapshots and dataset hash checks, plus an Experiments workspace for comparing, sweeping, resuming, and exporting from the UI.
+- Added an Edge E2E that exercises a two-variant sweep, opens the change explanation, downloads and checks report contents, and checks the workspace's seven distinct hero images load successfully. Full page artwork and responsive visual QA are recorded in `design-qa.md`.
+- Fixed repeated-metric summary identity so definitions with the same metric name and labels are not conflated or assigned duplicate React keys.
+
+### Scope and limitations
+
+- A sweep requires a ready, preflighted workload plan. Trials execute sequentially; uncertain or long estimated runtimes require an explicit confirmation.
+- Default verification uses deterministic fixtures and the fake engine. Live-engine behavior still depends on the configured local adapter and server.
+- Reports stay under the local data directory. Prompt/output content remains omitted unless already retained and explicitly selected for export.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` - passed.
+- `uv run --locked ruff check src tests` - passed.
+- `uv run --locked mypy src` - passed (37 source files).
+- `uv run --locked pytest -q` - passed (173 tests; 3 opt-in integration tests skipped).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` - passed.
+- `npm run lint` - passed.
+- `npm run typecheck` - passed.
+- `npm run test` - passed (29 tests).
+- `npm run build` - passed.
+- `npm run e2e` - passed (6 Microsoft Edge tests on isolated API/UI ports).
 
 Repository diff check: `git diff --check` - passed.
