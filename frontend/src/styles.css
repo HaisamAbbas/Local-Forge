@@ -7,24 +7,24 @@
   color-scheme: dark;
   font-optical-sizing: auto;
   font-weight: 400;
-  --color-canvas: #0b0e0f;
-  --color-surface: #111517;
-  --color-surface-raised: #181f22;
-  --color-surface-hover: #242c2f;
-  --color-surface-primary: #122a24;
-  --color-border: #384349;
-  --color-border-subtle: #2a3438;
-  --color-text: #f0f3f2;
+  --color-canvas: #080907;
+  --color-surface: #0d0f0c;
+  --color-surface-raised: #141610;
+  --color-surface-hover: #1d2018;
+  --color-surface-primary: #1a1d12;
+  --color-border: #30332b;
+  --color-border-subtle: #242720;
+  --color-text: #f2f2ed;
   --color-text-strong: #ffffff;
-  --color-text-secondary: #cdd5d7;
-  --color-text-muted: #aeb9bb;
-  --color-text-subtle: #94a1a4;
-  --color-primary: #2588df;
-  --color-primary-text: #70bcff;
-  --color-success: #58df91;
-  --color-success-surface: #142b20;
-  --color-success-border: #397c53;
-  --color-success-text: #8cf0b3;
+  --color-text-secondary: #c4c6bb;
+  --color-text-muted: #9a9d92;
+  --color-text-subtle: #797d72;
+  --color-primary: #cbe968;
+  --color-primary-text: #d7ef83;
+  --color-success: #9bd16e;
+  --color-success-surface: #1b2112;
+  --color-success-border: #5b7140;
+  --color-success-text: #d2eca0;
   --color-warning: #f0b85b;
   --color-warning-surface: #292113;
   --color-warning-border: #705322;
@@ -3675,8 +3675,8 @@ body {
   align-items: stretch;
   gap: 18px;
   padding: 0 clamp(16px, 2vw, 30px);
-  border-bottom: 1px solid var(--color-border);
-  background: #101416;
+  border-bottom: 1px solid #22241f;
+  background: #090a08;
 }
 
 .site-nav-status {
@@ -3690,9 +3690,9 @@ body {
 .site-nav-status .api-status {
   min-height: 38px;
   padding: 6px 10px;
-  border: 1px solid var(--color-border);
+  border: 1px solid #34372f;
   border-radius: 2px;
-  background: #151a1c;
+  background: #11120f;
 }
 
 .brand {
@@ -3706,10 +3706,10 @@ body {
 .brand-mark {
   width: 38px;
   height: 38px;
-  border-color: #416650;
+  border-color: #616f41;
   border-radius: 2px;
-  background: linear-gradient(145deg, #183126, #151c20);
-  color: #94eab2;
+  background: #141610;
+  color: var(--color-primary-text);
 }
 
 .brand-name {
@@ -3748,7 +3748,7 @@ body {
   justify-content: space-between;
   gap: 10px;
   padding: 0 10px;
-  border: 1px solid #374248;
+  border: 1px solid #30322d;
   border-radius: 1px;
   color: var(--color-text-secondary);
   font-size: 11px;
@@ -3760,16 +3760,16 @@ body {
 }
 
 .navigation-link:hover {
-  border-color: #68737a;
-  background: #1a1e22;
+  border-color: #56594d;
+  background: #171914;
   color: var(--color-text-strong);
 }
 
 .navigation-link[aria-current="page"] {
-  border-color: #8caa97;
-  background: #1b2621;
+  border-color: #596146;
+  background: #1a1d14;
   color: var(--color-text-strong);
-  box-shadow: inset 0 2px #68d994;
+  box-shadow: inset 0 2px var(--color-primary);
 }
 
 .navigation-label {
@@ -3823,21 +3823,21 @@ body {
 
 .page-heading--engines {
   position: relative;
-  min-height: 330px;
+  min-height: 370px;
   align-items: flex-end;
   justify-content: space-between;
   margin: 0 0 0;
   padding: 32px clamp(22px, 3.4vw, 50px) 29px;
-  border-bottom: 1px solid var(--color-border);
-  background-color: #111719;
+  border-bottom: 1px solid #292b25;
+  background-color: #080907;
   background-image:
-    linear-gradient(90deg, rgb(7 13 12 / 54%) 0%, rgb(7 13 12 / 28%) 34%, rgb(7 13 12 / 4%) 78%),
-    linear-gradient(0deg, rgb(7 10 10 / 38%) 0%, transparent 46%),
-    url("/images/localforge-compute-hero.jpg");
+    linear-gradient(90deg, rgb(5 6 5 / 20%) 0%, rgb(5 6 5 / 10%) 44%, rgb(5 6 5 / 4%) 100%),
+    linear-gradient(0deg, rgb(5 6 5 / 32%) 0%, transparent 52%),
+    url("/images/localforge-inference-hero.jpg");
   background-position:
     center,
     center,
-    center 48%;
+    center 52%;
   background-repeat: no-repeat;
   background-size: cover;
 }
@@ -3857,7 +3857,7 @@ body {
 .page-heading--engines .page-description {
   max-width: 440px;
   margin: 0;
-  color: #d2d8db;
+  color: #d3d4cc;
   font-size: 16px;
   line-height: 1.55;
 }
@@ -3867,10 +3867,10 @@ body {
   z-index: 1;
   gap: 9px;
   padding: 8px 11px;
-  border: 1px solid #688d74;
+  border: 1px solid #555d43;
   border-radius: 2px;
-  background: rgb(14 24 19 / 94%);
-  color: #e4f2e8;
+  background: rgb(10 11 8 / 92%);
+  color: #e6e8df;
   font-size: 12px;
 }
 
@@ -3890,7 +3890,7 @@ body {
 
 .engine-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 2.05fr) minmax(320px, 0.95fr);
+  grid-template-columns: minmax(0, 1.9fr) minmax(320px, 0.9fr);
   align-items: stretch;
   gap: 16px;
 }
@@ -3900,9 +3900,9 @@ body {
   min-height: 585px;
   margin: 0;
   padding: 20px;
-  border: 1px solid var(--color-border);
-  border-radius: 1px;
-  background: linear-gradient(150deg, #131a1c, #101416 60%);
+  border: 1px solid #292b25;
+  border-radius: 2px;
+  background: #0c0d0b;
 }
 
 .engine-catalog-panel .section-title-row,
@@ -3939,9 +3939,9 @@ body {
 .button,
 .icon-button {
   min-height: 36px;
-  border-color: #454e55;
+  border-color: #3b3d36;
   border-radius: 2px;
-  background: #15191d;
+  background: #151610;
   color: var(--color-text);
   font-size: 13px;
   font-weight: 600;
@@ -3949,31 +3949,31 @@ body {
 
 .button:hover:not(:disabled),
 .icon-button:hover {
-  border-color: var(--color-primary-text);
-  background: #1a2631;
+  border-color: #a7bd65;
+  background: #1c1e16;
 }
 
 .button--primary {
-  border-color: #f2f5f1;
-  background: #f2f5f1;
-  color: #101612;
+  border-color: #f0f0e9;
+  background: #f0f0e9;
+  color: #11120f;
 }
 
 .button--primary:hover:not(:disabled) {
   border-color: #ffffff;
   background: #ffffff;
-  color: #080a0b;
+  color: #080907;
 }
 
 .button--secondary {
-  border-color: #485159;
+  border-color: #494b42;
   background: transparent;
   color: var(--color-text);
 }
 
 .button--secondary:hover:not(:disabled) {
   border-color: var(--color-primary-text);
-  background: #132235;
+  background: #1a1d13;
   color: #ffffff;
 }
 
@@ -4002,26 +4002,26 @@ body {
   align-items: start;
   gap: 10px 16px;
   padding: 17px 14px;
-  border: 1px solid #364247;
-  border-top-width: 2px;
+  border: 1px solid #30332b;
+  border-top-width: 1px;
   border-radius: 2px;
-  background: linear-gradient(110deg, #171e20, #13181a 72%);
+  background: #11130f;
   transition:
     background-color 140ms ease-out,
     border-color 140ms ease-out;
 }
 
 .catalog-card:hover {
-  border-color: #50645a;
-  background: linear-gradient(110deg, #1a2421, #151b1d 72%);
+  border-color: #69714f;
+  background: #151711;
 }
 
 .catalog-card--fixture {
-  border-top-color: #5edb91;
+  border-top-color: #858a72;
 }
 
 .catalog-card--endpoint {
-  border-top-color: #5eafff;
+  border-top-color: #858a72;
 }
 
 .catalog-card-intro {
@@ -4038,20 +4038,19 @@ body {
   width: 40px;
   height: 40px;
   place-items: center;
-  border: 1px solid #3a5548;
+  border: 1px solid #494d3c;
   border-radius: 2px;
-  background: linear-gradient(145deg, #203c30, #17211f);
-  color: #8bebae;
+  background: #171911;
+  color: var(--color-primary-text);
 }
 
 .catalog-card--endpoint .catalog-card-icon {
-  border-color: #3d5967;
-  background: linear-gradient(145deg, #1c3442, #172126);
-  color: #8bcaff;
+  border-color: #494d3c;
+  background: #171911;
+  color: #e1e3d9;
 }
 
-.catalog-card-icon svg,
-.engine-profile-empty-icon svg {
+.catalog-card-icon svg {
   display: block;
 }
 
@@ -4106,7 +4105,7 @@ body {
   min-width: 0;
   gap: 9px;
   padding-left: 13px;
-  border-left: 1px solid #344044;
+  border-left: 1px solid #30332b;
 }
 
 .catalog-meta {
@@ -4120,7 +4119,7 @@ body {
 
 .catalog-meta span,
 .catalog-card-specs .catalog-details > summary {
-  color: var(--color-text-muted);
+  color: #aeb0a6;
   font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
   font-size: 11px;
   font-weight: 550;
@@ -4211,39 +4210,65 @@ body {
 }
 
 .engine-profiles-panel .empty-inline--action {
-  min-height: 295px;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  padding: 24px 16px;
-  border-top: 1px solid #34423a;
-  background:
-    radial-gradient(ellipse at 50% 64%, rgb(34 91 58 / 18%), transparent 54%),
-    linear-gradient(150deg, rgb(21 34 27 / 68%), rgb(16 20 21 / 30%) 68%);
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  border-top: 1px solid #30332b;
+  background: transparent;
   color: var(--color-text-secondary);
-  text-align: center;
+  text-align: left;
 }
 
-.engine-profiles-panel .empty-inline--action p {
-  max-width: 280px;
+.engine-profile-empty-visual {
+  position: relative;
+  height: 205px;
+  margin: 0;
+  overflow: hidden;
+  background: #10110e;
+}
+
+.engine-profile-empty-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 52%;
+}
+
+.engine-profile-empty-visual figcaption {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  color: #efefe8;
+  font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-shadow: 0 1px 6px #000;
+}
+
+.engine-profile-empty-copy {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 19px 0 0;
+}
+
+.engine-profile-empty-copy p {
   margin: 0;
   color: var(--color-text-secondary);
   font-size: 14px;
   line-height: 1.6;
 }
 
-.engine-profile-empty-icon {
-  display: grid;
-  width: 58px;
-  height: 58px;
-  place-items: center;
-  border: 1px solid #42634e;
-  border-radius: 2px;
-  background: linear-gradient(145deg, #203b2e, #182225);
-  color: #a1efbb;
-  box-shadow: 0 12px 42px rgb(37 112 67 / 14%);
+.engine-profile-empty-copy p strong {
+  color: var(--color-text-strong);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .engine-profile-card {
@@ -4420,6 +4445,7 @@ table td {
 
   .brand {
     grid-area: brand;
+    display: flex;
     width: fit-content;
     min-height: 42px;
     margin: 0;
@@ -4473,6 +4499,7 @@ table td {
 
   .brand {
     grid-area: brand;
+    display: flex;
     width: fit-content;
     min-height: 42px;
     margin: 0;
@@ -4626,7 +4653,7 @@ table td {
     background-image:
       linear-gradient(90deg, rgb(7 13 12 / 52%) 0%, rgb(7 13 12 / 32%) 45%, rgb(7 13 12 / 8%) 100%),
       linear-gradient(0deg, rgb(7 10 10 / 36%) 0%, transparent 48%),
-      url("/images/localforge-compute-hero.jpg");
+      url("/images/localforge-inference-hero.jpg");
     background-position:
       center,
       center,
@@ -4684,7 +4711,15 @@ table td {
   }
 
   .engine-profiles-panel .empty-inline--action {
-    min-height: 185px;
+    min-height: 0;
+  }
+
+  .engine-profile-empty-visual {
+    height: 170px;
+  }
+
+  .engine-profile-empty-copy {
+    padding-top: 16px;
   }
 }
 

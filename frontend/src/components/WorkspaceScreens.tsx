@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { IconApi, IconServer, IconTerminal2 } from "@tabler/icons-react";
+import { IconApi, IconTerminal2 } from "@tabler/icons-react";
 
 import {
   ApiError,
@@ -1389,7 +1389,7 @@ export function EnginesScreen() {
         <section className="panel engine-catalog-panel" aria-labelledby="engine-catalog-title">
           <div className="section-title-row">
             <div>
-              <p className="eyebrow">INSTALLED ADAPTERS</p>
+              <p className="eyebrow">01 / INSTALLED ADAPTERS</p>
               <h2 id="engine-catalog-title">Engine catalog</h2>
             </div>
             <button
@@ -1497,10 +1497,10 @@ export function EnginesScreen() {
         <section className="panel engine-profiles-panel" aria-labelledby="engine-profiles-title">
           <div className="section-title-row">
             <div>
-              <p className="eyebrow">LOCAL CONNECTIONS</p>
+              <p className="eyebrow">02 / LOCAL CONNECTIONS</p>
               <h2 id="engine-profiles-title">Engine profiles</h2>
               <p className="engine-profiles-description">
-                Saved endpoints for your local inference workflows.
+                Local servers and user-selected endpoints, in one place.
               </p>
             </div>
             <button
@@ -1524,22 +1524,28 @@ export function EnginesScreen() {
             {(items) =>
               items.length === 0 ? (
                 <div className="empty-inline empty-inline--action">
-                  <span className="engine-profile-empty-icon" aria-hidden="true">
-                    <IconServer size={34} stroke={1.7} />
-                  </span>
-                  <p>No engine profiles are configured.</p>
-                  <button
-                    className="button button--primary"
-                    disabled={!availableManifests.length}
-                    onClick={() => {
-                      setDialogError("");
-                      setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
-                      setEditing("new");
-                    }}
-                    type="button"
-                  >
-                    Add your first engine
-                  </button>
+                  <figure className="engine-profile-empty-visual" aria-hidden="true">
+                    <img src="/images/localforge-engine-detail.jpg" alt="" />
+                    <figcaption>LOCAL WORKSPACE / READY TO CONNECT</figcaption>
+                  </figure>
+                  <div className="engine-profile-empty-copy">
+                    <p>
+                      <strong>No engine profiles are configured.</strong>
+                    </p>
+                    <p>Connect a local runtime or a user-selected endpoint to begin testing.</p>
+                    <button
+                      className="button button--primary"
+                      disabled={!availableManifests.length}
+                      onClick={() => {
+                        setDialogError("");
+                        setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
+                        setEditing("new");
+                      }}
+                      type="button"
+                    >
+                      Add your first engine
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="engine-profile-list">

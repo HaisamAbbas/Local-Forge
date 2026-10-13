@@ -10,7 +10,7 @@ const navigation = [
   {
     id: "engines",
     label: "Engines",
-    description: "Review installed adapters and manage engine connection profiles.",
+    description: "Connect runtimes and inspect what each server supports.",
   },
   {
     id: "system",
@@ -73,8 +73,8 @@ export function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-copy">
-          <p className="eyebrow">LOCAL WORKSPACE</p>
-          <p className="topbar-caption">Inference benchmarking and experimentation</p>
+          <p className="eyebrow">INFERENCE LAB / PRIVATE BY DEFAULT</p>
+          <p className="topbar-caption">Benchmark local runtimes and endpoints you choose.</p>
         </div>
       </header>
       <div className="workspace">
