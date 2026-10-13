@@ -46,7 +46,7 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     catalog = default_adapter_catalog()
     manifests = catalog.list_manifests()
 
-    assert len(manifests) == 2
+    assert len(manifests) == 3
     manifest = next(item for item in manifests if item.adapter_id == FAKE_ADAPTER_ID)
     assert isinstance(manifest, AdapterManifest)
     assert manifest.adapter_id == FAKE_ADAPTER_ID
@@ -61,6 +61,16 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     )
     assert compatible.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert "managed_process" not in compatible.declared_capabilities
+    llama_cpp = next(item for item in manifests if item.adapter_id == "localforge.llama_cpp")
+    assert llama_cpp.integration_modes == [
+        EngineIntegrationMode.ATTACHED_ENDPOINT,
+        EngineIntegrationMode.MANAGED_PROCESS,
+    ]
+    assert "b11580" in llama_cpp.description
+    assert any(
+        "GGUF model files must already exist locally" in item
+        for item in llama_cpp.known_limitations
+    )
 
     with pytest.raises(ValidationError, match="adapter_id"):
         AdapterManifest.model_validate(

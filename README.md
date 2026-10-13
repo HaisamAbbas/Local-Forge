@@ -101,6 +101,15 @@ Set-Location backend
 uv run pytest tests/test_openai_compatible_integration.py
 ```
 
+### Connect llama.cpp / llama-server
+
+In **Engines**, choose **llama.cpp / llama-server**. Attach mode connects to a server already
+running on the local machine. Managed mode starts only an explicitly selected llama-server binary
+with an existing GGUF file and working directory. LocalForge never downloads model weights.
+Managed launch stays on 127.0.0.1, and GPU support depends on the backend compiled into the chosen
+binary. See [the llama.cpp adapter guide](docs/llama-cpp.md) for supported probes and metrics, the
+version-pinned upstream references, and an opt-in live smoke test.
+
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:
 

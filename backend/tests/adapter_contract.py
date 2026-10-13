@@ -13,6 +13,8 @@ async def assert_registered_adapter_contract(
     catalog: AdapterCatalog,
     adapter_id: str,
     config: AdapterConfiguration,
+    *,
+    managed_config: AdapterConfiguration | None = None,
 ) -> None:
     """Exercise the stable adapter surface; reusable for future connector fixtures."""
 
@@ -43,8 +45,10 @@ async def assert_registered_adapter_contract(
     assert fingerprint.adapter_id == adapter_id
 
     if EngineIntegrationMode.MANAGED_PROCESS in manifest.integration_modes:
-        process_config = AdapterConfiguration(
+        process_config = managed_config or AdapterConfiguration(
             integration_mode=EngineIntegrationMode.MANAGED_PROCESS
         )
+        assert process_config.integration_mode is EngineIntegrationMode.MANAGED_PROCESS
+        assert (await catalog.validate_config(adapter_id, process_config)).valid
         process = await catalog.start(adapter_id, process_config)
         await catalog.stop(adapter_id, process)
