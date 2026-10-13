@@ -150,8 +150,12 @@ class AdapterCatalog:
                             f"Adapter '{adapter_id}' returned native metrics it did not declare."
                         )
                     undeclared_metrics = {
-                        metric.metric_name for metric in event.native_metrics
-                    } - set(manifest.native_metrics)
+                        metric.metric_name
+                        for metric in event.native_metrics
+                        if not _native_metric_is_declared(
+                            metric.metric_name, manifest.native_metrics
+                        )
+                    }
                     if undeclared_metrics:
                         names = ", ".join(sorted(undeclared_metrics))
                         raise AdapterCapabilityClaimError(
@@ -176,9 +180,11 @@ class AdapterCatalog:
             raise AdapterCapabilityClaimError(
                 f"Adapter '{adapter_id}' returned native metrics it did not declare."
             )
-        undeclared_metrics = {metric.metric_name for metric in result.metrics} - set(
-            manifest.native_metrics
-        )
+        undeclared_metrics = {
+            metric.metric_name
+            for metric in result.metrics
+            if not _native_metric_is_declared(metric.metric_name, manifest.native_metrics)
+        }
         if undeclared_metrics:
             names = ", ".join(sorted(undeclared_metrics))
             raise AdapterCapabilityClaimError(
@@ -222,10 +228,25 @@ def default_adapter_catalog() -> AdapterCatalog:
     from localforge.adapters.llama_cpp import LlamaCppEngineAdapter
     from localforge.adapters.ollama import OllamaEngineAdapter
     from localforge.adapters.openai_compatible import OpenAICompatibleEngineAdapter
+    from localforge.adapters.sglang import SglangEngineAdapter
+    from localforge.adapters.vllm import VllmEngineAdapter
 
     catalog = AdapterCatalog()
     catalog.register(FakeEngineAdapter())
     catalog.register(OpenAICompatibleEngineAdapter())
     catalog.register(LlamaCppEngineAdapter())
     catalog.register(OllamaEngineAdapter())
+    catalog.register(VllmEngineAdapter())
+    catalog.register(SglangEngineAdapter())
     return catalog
+
+
+def _native_metric_is_declared(name: str, declarations: list[str]) -> bool:
+    if name in declarations:
+        return True
+    return any(
+        declaration.endswith(":*")
+        and name.startswith(declaration[:-1])
+        and len(name) > len(declaration) - 1
+        for declaration in declarations
+    )

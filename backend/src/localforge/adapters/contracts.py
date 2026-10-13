@@ -63,6 +63,14 @@ class AdapterManifest(SchemaModel):
             raise ValueError("adapter_id must be lowercase and use stable identifier characters")
         return value
 
+    @field_validator("native_metrics")
+    @classmethod
+    def native_metric_patterns_must_be_explicit(cls, value: list[str]) -> list[str]:
+        for name in value:
+            if "*" in name and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,119}:\*", name):
+                raise ValueError("native metric wildcards must be a lowercase namespace prefix")
+        return value
+
 
 class AdapterConfiguration(SchemaModel):
     integration_mode: EngineIntegrationMode
