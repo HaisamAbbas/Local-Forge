@@ -58,7 +58,11 @@ from localforge.core.models import (
 )
 from localforge.core.urls import endpoint_is_remote
 from localforge.dataset_import import DatasetImportError, parse_dataset
-from localforge.dataset_storage import verify_dataset_snapshot, write_snapshot
+from localforge.dataset_storage import (
+    dataset_incoming_directory,
+    verify_dataset_snapshot,
+    write_snapshot,
+)
 from localforge.storage.database import transaction
 from localforge.storage.repositories import RecordRepository
 
@@ -143,11 +147,18 @@ async def import_dataset(
 
     data_directory = cast(Path, request.app.state.data_directory)
     maximum_bytes = cast(int, request.app.state.max_dataset_upload_bytes)
-    incoming_directory = data_directory / "datasets" / "incoming"
-    incoming_directory.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix="upload-", suffix=".tmp", dir=incoming_directory
-    )
+    try:
+        incoming_directory = dataset_incoming_directory(data_directory)
+        incoming_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="upload-", suffix=".tmp", dir=incoming_directory
+        )
+    except (OSError, ValueError) as error:
+        raise _http_error(
+            500,
+            "dataset_storage_unavailable",
+            "LOCALFORGE could not prepare its private dataset storage directory.",
+        ) from error
     temporary_path = Path(temporary_name)
     size_bytes = 0
     try:
@@ -182,7 +193,14 @@ async def import_dataset(
                 line=error.line,
             ) from error
 
-        storage_ref = write_snapshot(data_directory, parsed) if retain_content else None
+        try:
+            storage_ref = write_snapshot(data_directory, parsed) if retain_content else None
+        except (OSError, ValueError) as error:
+            raise _http_error(
+                500,
+                "dataset_storage_unavailable",
+                "LOCALFORGE could not safely store the retained dataset snapshot.",
+            ) from error
         summary = (
             f"{parsed.parsed_rows} source rows; {len(parsed.rows)} selected; "
             f"{parsed.duplicate_rows} duplicates. Prompt content "

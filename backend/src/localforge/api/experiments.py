@@ -230,7 +230,10 @@ def _safe_export_filename(name: str, file_format: ReportFormat, report_id: UUID)
 
 def _report_directory(request: Request) -> tuple[Path, Path]:
     data_directory = Path(request.app.state.data_directory).resolve()
-    reports_directory = (data_directory / "reports").resolve()
+    report_path = data_directory / "reports"
+    if report_path.is_symlink() or report_path.is_junction():
+        raise _error(422, "invalid_export_path", "The reports directory cannot be a link.")
+    reports_directory = report_path.resolve()
     if not reports_directory.is_relative_to(data_directory):
         raise _error(422, "invalid_export_path", "The reports directory escaped local storage.")
     return data_directory, reports_directory
@@ -1176,7 +1179,10 @@ def create_report(
         raise _error(status, code, str(error)) from error
 
     data_directory, reports_directory = _report_directory(request)
-    target = (reports_directory / f"{report_id}.{body.format.value}").resolve()
+    target_candidate = reports_directory / f"{report_id}.{body.format.value}"
+    if target_candidate.is_symlink() or target_candidate.is_junction():
+        raise _error(422, "invalid_export_path", "The report target cannot be a link.")
+    target = target_candidate.resolve()
     if not target.is_relative_to(reports_directory):
         raise _error(
             422, "invalid_export_path", "The report target escaped the local reports directory."
@@ -1256,7 +1262,13 @@ def download_report(
     if report is None or report.status is not ReportStatus.READY or not report.export_ref:
         raise _error(404, "report_file_not_found", "The report file is not available.")
     data_directory, reports_directory = _report_directory(request)
-    path = (data_directory / report.export_ref).resolve()
+    expected_export_ref = f"reports/{report.id}.{report.format.value}"
+    if report.export_ref != expected_export_ref:
+        raise _error(404, "report_file_not_found", "The report file is not available.")
+    target_candidate = reports_directory / f"{report.id}.{report.format.value}"
+    if target_candidate.is_symlink() or target_candidate.is_junction():
+        raise _error(404, "report_file_not_found", "The report file is not available.")
+    path = target_candidate.resolve()
     if not path.is_relative_to(reports_directory):
         raise _error(404, "report_file_not_found", "The report file is not available.")
     if not path.is_file():

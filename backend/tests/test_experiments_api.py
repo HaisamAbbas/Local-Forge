@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import subprocess
 import time
 from datetime import UTC, datetime
 from uuid import UUID
@@ -32,6 +33,7 @@ from localforge.core.models import (
     MetricSource,
     ModelArtifact,
     ReportFormat,
+    ReportMetadata,
     RequestOutcome,
     RequestSample,
     Workload,
@@ -45,6 +47,7 @@ from localforge.storage.repositories import (
     RecordRepository,
     RequestSampleRepository,
 )
+from tests.path_helpers import create_directory_link
 from tests.test_workload_api import _authorize, _client, _ready_engine
 
 
@@ -722,6 +725,70 @@ def test_failed_report_write_keeps_runs_and_records_failure(tmp_path) -> None:
         assert reports[-1]["status"] == "failed"
         persisted_runs = client.get("/api/v1/runs").json()
         assert {run["id"] for run in persisted_runs} >= {str(item) for item in run_ids}
+
+
+def test_report_export_rejects_a_symlinked_reports_directory(tmp_path) -> None:
+    app = create_app(AppSettings(data_directory=tmp_path))
+    run_ids, _, _ = _seed_runs(
+        app,
+        tmp_path,
+        [{"sampling_config": {"temperature": 0.2}}, {"sampling_config": {"temperature": 0.8}}],
+    )
+    outside = tmp_path.parent / f"{tmp_path.name}-reports-outside"
+    outside.mkdir()
+    try:
+        create_directory_link(tmp_path / "reports", outside)
+    except (NotImplementedError, OSError, subprocess.SubprocessError) as error:
+        pytest.skip(f"directory symlinks are unavailable: {error}")
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        _authorize(client)
+        response = client.post(
+            "/api/v1/reports",
+            json={
+                "name": "Outside report",
+                "format": "json",
+                "run_ids": [str(run_id) for run_id in run_ids],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_export_path"
+    assert list(outside.iterdir()) == []
+
+
+def test_report_download_rejects_a_tampered_export_reference(tmp_path) -> None:
+    app = create_app(AppSettings(data_directory=tmp_path))
+    run_ids, _, _ = _seed_runs(
+        app,
+        tmp_path,
+        [{"sampling_config": {"temperature": 0.2}}, {"sampling_config": {"temperature": 0.8}}],
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        _authorize(client)
+        created = client.post(
+            "/api/v1/reports",
+            json={
+                "name": "Path guard",
+                "format": "json",
+                "run_ids": [str(run_id) for run_id in run_ids],
+            },
+        )
+        assert created.status_code == 201, created.text
+        report_id = UUID(created.json()["report"]["id"])
+
+        connection = open_database(app.state.database_path)
+        try:
+            repository = RecordRepository(connection, ReportMetadata)
+            report = repository.get(report_id)
+            assert report is not None
+            repository.update(report.model_copy(update={"export_ref": "../outside.json"}))
+        finally:
+            connection.close()
+
+        downloaded = client.get(f"/api/v1/reports/{report_id}/download")
+        assert downloaded.status_code == 404
+        assert downloaded.json()["detail"]["code"] == "report_file_not_found"
 
 
 def test_benchmark_plan_export_import_preserves_workload_configuration(tmp_path) -> None:

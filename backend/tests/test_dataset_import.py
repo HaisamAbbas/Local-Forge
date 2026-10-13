@@ -1,5 +1,7 @@
 """Streaming parser and immutable content-addressed dataset snapshot checks."""
 
+import subprocess
+
 import pytest
 
 from localforge.core.models import (
@@ -11,7 +13,12 @@ from localforge.core.models import (
     PromptSizingMethod,
 )
 from localforge.dataset_import import DatasetImportError, parse_dataset
-from localforge.dataset_storage import verify_dataset_snapshot, write_snapshot
+from localforge.dataset_storage import (
+    dataset_incoming_directory,
+    verify_dataset_snapshot,
+    write_snapshot,
+)
+from tests.path_helpers import create_directory_link
 
 
 def _parse(path, *, format: DatasetFormat = DatasetFormat.JSONL, **overrides):
@@ -105,3 +112,66 @@ def test_retained_snapshot_verification_detects_modified_bytes(tmp_path) -> None
     assert verify_dataset_snapshot(tmp_path, dataset) is True
     (tmp_path / dataset.storage_ref).write_text('{"prompt":"changed"}\n', encoding="utf-8")
     assert verify_dataset_snapshot(tmp_path, dataset) is False
+
+
+def test_dataset_storage_rejects_a_symlinked_root(tmp_path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    try:
+        create_directory_link(tmp_path / "datasets", outside)
+    except (NotImplementedError, OSError, subprocess.SubprocessError) as error:
+        pytest.skip(f"directory symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="cannot be a link"):
+        dataset_incoming_directory(tmp_path)
+
+    source = tmp_path / "prompts.jsonl"
+    source.write_text('{"prompt":"private"}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="cannot be a link"):
+        write_snapshot(tmp_path, _parse(source))
+    assert list(outside.iterdir()) == []
+
+
+def test_dataset_storage_rejects_a_symlinked_upload_staging_directory(tmp_path) -> None:
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-incoming-outside"
+    outside.mkdir()
+    try:
+        create_directory_link(datasets / "incoming", outside)
+    except (NotImplementedError, OSError, subprocess.SubprocessError) as error:
+        pytest.skip(f"directory symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="staging directory cannot be a link"):
+        dataset_incoming_directory(tmp_path)
+    assert list(outside.iterdir()) == []
+
+
+def test_dataset_storage_rejects_a_symlinked_snapshot_file(tmp_path) -> None:
+    source = tmp_path / "prompts.jsonl"
+    source.write_text('{"prompt":"private"}\n', encoding="utf-8")
+    parsed = _parse(source)
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-snapshot-outside.jsonl"
+    outside.write_text('{"prompt":"outside"}\n', encoding="utf-8")
+    snapshot = datasets / f"{parsed.snapshot_hash}.jsonl"
+    try:
+        snapshot.symlink_to(outside)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"file symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="snapshot cannot be a link"):
+        write_snapshot(tmp_path, parsed)
+    dataset = Dataset(
+        name="Linked prompts",
+        source=DatasetSource.IMPORTED_FILE,
+        status=DatasetStatus.READY,
+        item_count=len(parsed.rows),
+        content_hash=parsed.source_hash,
+        snapshot_hash=parsed.snapshot_hash,
+        content_retained=True,
+        storage_ref=f"datasets/{parsed.snapshot_hash}.jsonl",
+    )
+    assert verify_dataset_snapshot(tmp_path, dataset) is False
+    assert outside.read_text(encoding="utf-8") == '{"prompt":"outside"}\n'

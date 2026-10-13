@@ -9,13 +9,48 @@ from localforge.core.models import Dataset
 from localforge.dataset_import import ParsedDataset
 
 
+def _is_path_link(path: Path) -> bool:
+    """Recognize symbolic links and Windows junctions in storage path components."""
+
+    return path.is_symlink() or path.is_junction()
+
+
+def dataset_incoming_directory(data_directory: Path) -> Path:
+    """Return the upload staging directory after rejecting redirected path components."""
+
+    data_root = data_directory.resolve()
+    datasets_path = data_root / "datasets"
+    if _is_path_link(datasets_path):
+        raise ValueError("dataset storage directory cannot be a link")
+    datasets_root = datasets_path.resolve()
+    if datasets_root.parent != data_root:
+        raise ValueError("dataset storage directory escaped local storage")
+
+    incoming_path = datasets_root / "incoming"
+    if _is_path_link(incoming_path):
+        raise ValueError("dataset upload staging directory cannot be a link")
+    incoming_root = incoming_path.resolve()
+    if incoming_root.parent != datasets_root:
+        raise ValueError("dataset upload staging directory escaped dataset storage")
+    return incoming_root
+
+
 def _snapshot_path(data_directory: Path, snapshot_hash: str) -> Path:
     if len(snapshot_hash) != 64 or any(
         character not in "0123456789abcdef" for character in snapshot_hash
     ):
         raise ValueError("dataset snapshot hash is invalid")
-    root = (data_directory / "datasets").resolve()
-    path = (root / f"{snapshot_hash}.jsonl").resolve()
+    data_root = data_directory.resolve()
+    dataset_directory = data_root / "datasets"
+    if _is_path_link(dataset_directory):
+        raise ValueError("dataset storage directory cannot be a link")
+    root = dataset_directory.resolve()
+    if root.parent != data_root:
+        raise ValueError("dataset storage directory escaped local storage")
+    candidate = root / f"{snapshot_hash}.jsonl"
+    if _is_path_link(candidate):
+        raise ValueError("dataset snapshot cannot be a link")
+    path = candidate.resolve()
     if path.parent != root:
         raise ValueError("dataset snapshot path escaped its storage directory")
     return path

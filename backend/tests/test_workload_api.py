@@ -1,5 +1,6 @@
 """Dataset import, deterministic workloads, and benchmark-plan preflight behavior."""
 
+import subprocess
 from uuid import UUID
 
 import pytest
@@ -21,6 +22,7 @@ from localforge.core.models import (
 )
 from localforge.storage.database import open_database
 from localforge.storage.repositories import RecordRepository
+from tests.path_helpers import create_directory_link
 
 
 def _client(
@@ -286,6 +288,25 @@ def test_import_rejects_path_traversal_and_upload_size_over_limit(tmp_path) -> N
         assert oversized.status_code == 413
         assert oversized.json()["detail"]["code"] == "dataset_too_large"
         assert client.get("/api/v1/datasets").json() == []
+
+
+def test_import_rejects_a_symlinked_upload_directory(tmp_path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-upload-outside"
+    outside.mkdir()
+    (tmp_path / "datasets").mkdir()
+    try:
+        create_directory_link(tmp_path / "datasets" / "incoming", outside)
+    except (NotImplementedError, OSError, subprocess.SubprocessError) as error:
+        pytest.skip(f"directory symlinks are unavailable: {error}")
+
+    client, _ = _client(tmp_path)
+    with client:
+        _authorize(client)
+        response = _upload(client, '{"prompt":"private upload"}\n', retain_content="true")
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "dataset_storage_unavailable"
+    assert list(outside.iterdir()) == []
 
 
 def test_preset_workload_replays_same_seed_and_rejects_invalid_traffic(tmp_path) -> None:
