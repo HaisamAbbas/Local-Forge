@@ -11,7 +11,7 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
 
     assert response.status_code == 200
     manifests = response.json()
-    assert len(manifests) == 6
+    assert len(manifests) == 13
     fake = next(item for item in manifests if item["adapter_id"] == "localforge.fake")
     assert fake["adapter_version"] == "1.0.0"
     assert fake["category"] == "test_fixture"
@@ -33,3 +33,12 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
     assert vllm["integration_modes"] == ["attached_endpoint"]
     assert sglang["integration_modes"] == ["attached_endpoint"]
     assert vllm["adapter_id"] != sglang["adapter_id"]
+    tgi = next(item for item in manifests if item["adapter_id"] == "localforge.tgi")
+    assert tgi["maintenance_mode"] is True
+    assert tgi["recommended_for_new_managed_install"] is False
+    assert tgi["version_tested"] == ["3.3.7 (local API fixture)"]
+    triton = next(
+        item for item in manifests if item["adapter_id"] == "localforge.triton_tensorrt_llm"
+    )
+    assert triton["implementation_status"] == "planned"
+    assert triton["integration_modes"] == []

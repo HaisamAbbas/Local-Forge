@@ -16,8 +16,11 @@ class ServingEngineServer:
     metrics_delay: float = 0
     health_status: int = 200
     chat_status: int = 200
+    chat_delay: float = 0
     expected_api_key: str | None = None
     usage_probe_body: str | None = None
+    selected_backend: str | None = None
+    backend_status: int = 200
     requests: list[dict[str, Any]] = field(default_factory=list)
     server: asyncio.AbstractServer | None = None
     endpoint_url: str = ""
@@ -74,6 +77,31 @@ class ServingEngineServer:
                 else:
                     await self._json(writer, 200, {"version": self.version})
                 return
+            if method == "GET" and path == "/info":
+                if self.version is None:
+                    await self._json(writer, 404, {"error": {"message": "not found"}})
+                else:
+                    await self._json(
+                        writer,
+                        200,
+                        {
+                            "version": self.version,
+                            "model_id": "fixture-model",
+                            "model_sha": "fixture-sha",
+                            "docker_label": "fixture-label",
+                        },
+                    )
+                return
+            if method == "GET" and path == "/api/extra/version":
+                await self._json(
+                    writer,
+                    200,
+                    {"result": "KoboldCpp", "version": self.version or "1.122.1"},
+                )
+                return
+            if method == "GET" and path.startswith("/api/models/config-json/"):
+                await self._json(writer, self.backend_status, {"backend": self.selected_backend})
+                return
             if method == "GET" and path == "/model_info":
                 await self._json(
                     writer,
@@ -117,6 +145,8 @@ class ServingEngineServer:
                 )
                 return
             if method == "POST" and path == "/v1/chat/completions":
+                if self.chat_delay:
+                    await asyncio.sleep(self.chat_delay)
                 if self.chat_status != 200:
                     await self._json(
                         writer,

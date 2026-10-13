@@ -29,6 +29,7 @@ class VllmEngineAdapter(OpenAIServingEngineAdapter):
     default_include_usage = True
     docs_url = "https://docs.vllm.ai/en/stable/serving/online_serving/"
     default_port = 8000
+    tested_versions = ("0.10.2 (local API fixture)",)
 
     def __init__(
         self,

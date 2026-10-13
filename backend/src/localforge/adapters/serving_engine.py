@@ -18,6 +18,7 @@ from localforge.adapters.contracts import (
     AdapterDiagnostic,
     AdapterManifest,
     AdapterModel,
+    AdapterPlatform,
     AdapterProcessHandle,
     AdapterStreamEvent,
     ConfigValidationResult,
@@ -28,6 +29,7 @@ from localforge.adapters.contracts import (
     ProbeResult,
     ProbeStatus,
     RuntimeFingerprint,
+    RuntimeStackLayer,
     capability,
 )
 from localforge.adapters.openai_compatible import (
@@ -150,13 +152,14 @@ class OpenAIServingEngineAdapter:
     namespace: str
     display_name: str
     description: str
-    metrics_prefix: str
-    default_health_route: str
+    metrics_prefix: str | None
+    default_health_route: str | None
     default_version_route: str | None
     default_model_info_route: str | None
     default_include_usage: bool
     docs_url: str
     default_port: int
+    tested_versions: tuple[str, ...] = ()
     unsafe_routes: frozenset[str] = frozenset()
 
     _extension_keys = {
@@ -183,6 +186,19 @@ class OpenAIServingEngineAdapter:
         )
 
     def describe(self) -> AdapterManifest:
+        declared_capabilities = {
+            "chat_completion",
+            "streaming",
+            "cancellation",
+            "usage_counts",
+            "health",
+            "model_inventory",
+            "version_discovery",
+            "runtime_fingerprint",
+        }
+        if self.metrics_prefix is not None:
+            declared_capabilities.add("native_metrics")
+
         return AdapterManifest(
             protocol_version=1,
             adapter_id=self.adapter_id,
@@ -191,19 +207,25 @@ class OpenAIServingEngineAdapter:
             description=self.description,
             category=AdapterCategory.OPENAI_COMPATIBLE,
             integration_modes=[EngineIntegrationMode.ATTACHED_ENDPOINT],
-            declared_capabilities={
-                "chat_completion",
-                "streaming",
-                "cancellation",
-                "usage_counts",
-                "health",
-                "model_inventory",
-                "version_discovery",
-                "native_metrics",
-                "runtime_fingerprint",
-            },
-            supported_transports=["http", "https", "server_sent_events", "prometheus_text"],
-            native_metrics=[f"{self.metrics_prefix}*"],
+            operating_systems=[
+                AdapterPlatform.WINDOWS,
+                AdapterPlatform.LINUX,
+                AdapterPlatform.MACOS,
+            ],
+            version_tested=list(self.tested_versions),
+            maintenance_mode=bool(getattr(self, "maintenance_mode", False)),
+            recommended_for_new_managed_install=bool(
+                getattr(self, "recommended_for_new_managed_install", True)
+            ),
+            status_details=getattr(self, "status_details", None),
+            declared_capabilities=declared_capabilities,
+            supported_transports=[
+                "http",
+                "https",
+                "server_sent_events",
+                *(["prometheus_text"] if self.metrics_prefix is not None else []),
+            ],
+            native_metrics=[f"{self.metrics_prefix}*"] if self.metrics_prefix else [],
             config_schema={
                 "type": "object",
                 "properties": {
@@ -235,10 +257,18 @@ class OpenAIServingEngineAdapter:
             },
             known_limitations=[
                 "Attach mode only; LOCALFORGE does not install or launch this serving engine.",
+                "The OS list describes supported LOCALFORGE hosts; an attached endpoint may run "
+                "on another machine or operating system.",
                 "Only text Chat Completions requests are normalized; engine-specific features "
-                "remain available only through native metrics or engine-side configuration.",
-                "Native Prometheus samples retain their engine names, labels, types, and reported "
-                "definitions; they are not mapped to client-measured metrics.",
+                "remain available through engine-side configuration.",
+                *(
+                    [
+                        "Native Prometheus samples retain their engine names, labels, types, and "
+                        "reported definitions; they are not mapped to client-measured metrics."
+                    ]
+                    if self.metrics_prefix is not None
+                    else ["This connector does not claim native metrics support."]
+                ),
                 "Server version or device details remain unknown when the selected engine does not "
                 "expose them through a safe endpoint.",
             ],
@@ -739,6 +769,14 @@ class OpenAIServingEngineAdapter:
                     "Optional serving-engine metrics are disabled for this profile.",
                 ),
             )
+        if self.metrics_prefix is None:
+            return MetricsResult(
+                available=False,
+                diagnostic=_diagnostic(
+                    "native_metrics_unsupported",
+                    f"{self.display_name} does not document a compatible Prometheus metrics route.",
+                ),
+            )
         route = self._route_setting(config, "metrics_route", "/metrics")
         if route is None:
             return MetricsResult(
@@ -911,8 +949,8 @@ class OpenAIServingEngineAdapter:
                     _diagnostic(
                         "server_version_not_safely_exposed",
                         f"{self.display_name} has no configured safe version route. "
-                        "The connector does not call /server_info because that endpoint can "
-                        "return server credentials.",
+                        "The connector leaves the version unknown instead of probing an "
+                        "undocumented endpoint.",
                         DiagnosticSeverity.WARNING,
                     )
                 )
@@ -970,15 +1008,19 @@ class OpenAIServingEngineAdapter:
             if metrics.diagnostic and metrics.diagnostic.retryable
             else CapabilitySupport.UNSUPPORTED
         )
-        observed_capabilities["native_metrics"] = capability(
-            metrics_state,
-            details=(
-                f"{len(metrics.metrics)} raw {self.display_name} Prometheus sample(s) were read."
-                if metrics.available
-                else (metrics.diagnostic.message if metrics.diagnostic else "Metrics unavailable.")
-            ),
-            source=f"{self.adapter_id}:{version or 'unknown'}:metrics_probe",
-        )
+        if self.metrics_prefix is not None:
+            observed_capabilities["native_metrics"] = capability(
+                metrics_state,
+                details=(
+                    f"{len(metrics.metrics)} raw {self.display_name} Prometheus "
+                    "sample(s) were read."
+                    if metrics.available
+                    else (
+                        metrics.diagnostic.message if metrics.diagnostic else "Metrics unavailable."
+                    )
+                ),
+                source=f"{self.adapter_id}:{version or 'unknown'}:metrics_probe",
+            )
         observed_capabilities["runtime_fingerprint"] = capability(
             CapabilitySupport.SUPPORTED,
             details=(
@@ -991,7 +1033,8 @@ class OpenAIServingEngineAdapter:
         checks = dict(chat_probe.checks)
         checks["usage_counts"] = usage_probe
         checks["version_discovery"] = observed_capabilities["version_discovery"]
-        checks["native_metrics"] = observed_capabilities["native_metrics"]
+        if self.metrics_prefix is not None:
+            checks["native_metrics"] = observed_capabilities["native_metrics"]
         checks["runtime_metadata"] = capability(
             CapabilitySupport.SUPPORTED if model_info else CapabilitySupport.UNKNOWN,
             details=(
@@ -1017,6 +1060,22 @@ class OpenAIServingEngineAdapter:
             ),
             diagnostics=diagnostics,
         )
+
+    def _stack_layers(
+        self,
+        *,
+        version: str | None,
+        model_info: dict[str, JsonValue] | None,
+    ) -> list[RuntimeStackLayer]:
+        del model_info
+        return [
+            RuntimeStackLayer(
+                layer_type="runtime",
+                name=self.display_name,
+                version=version,
+                source="engine_reported" if version else "verified_config",
+            )
+        ]
 
     async def collect_fingerprint(self, config: AdapterConfiguration) -> RuntimeFingerprint:
         version, _state, _details = await self._discover_version(config)
@@ -1062,6 +1121,7 @@ class OpenAIServingEngineAdapter:
             engine_version=version,
             runtime_name=self.display_name,
             runtime_version=version,
+            stack_layers=self._stack_layers(version=version, model_info=model_info),
             settings={
                 self.namespace: {
                     "endpoint_host": endpoint.hostname or "unknown",

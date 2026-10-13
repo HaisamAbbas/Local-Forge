@@ -53,9 +53,27 @@ class AdapterCatalog:
                 f"{manifest.protocol_version}; this LOCALFORGE build supports "
                 f"version {ADAPTER_PROTOCOL_VERSION}. Install a compatible adapter."
             )
+        if manifest.implementation_status != "implemented":
+            raise ValueError("only implemented adapter manifests can be registered as adapters")
         if manifest.adapter_id in self._adapters:
             raise ValueError(f"adapter '{manifest.adapter_id}' is already registered")
         self._adapters[manifest.adapter_id] = adapter
+        self._manifests[manifest.adapter_id] = manifest
+        return manifest
+
+    def register_catalog_entry(self, manifest: AdapterManifest) -> AdapterManifest:
+        """Expose a planned connector without making it appear callable or installed."""
+
+        if manifest.protocol_version != ADAPTER_PROTOCOL_VERSION:
+            raise AdapterVersionError(
+                f"Catalog entry '{manifest.adapter_id}' uses protocol version "
+                f"{manifest.protocol_version}; this LOCALFORGE build supports "
+                f"version {ADAPTER_PROTOCOL_VERSION}."
+            )
+        if manifest.implementation_status == "implemented":
+            raise ValueError("catalog-only entries must be planned or unsupported")
+        if manifest.adapter_id in self._manifests:
+            raise ValueError(f"catalog entry '{manifest.adapter_id}' is already registered")
         self._manifests[manifest.adapter_id] = manifest
         return manifest
 
@@ -225,10 +243,17 @@ def default_adapter_catalog() -> AdapterCatalog:
     """Build the local catalog with fixture and local/attached server adapters."""
 
     from localforge.adapters.fake import FakeEngineAdapter
+    from localforge.adapters.koboldcpp import KoboldCppEngineAdapter
+    from localforge.adapters.lightllm import LightLlmEngineAdapter
     from localforge.adapters.llama_cpp import LlamaCppEngineAdapter
+    from localforge.adapters.lmdeploy import LmDeployEngineAdapter
+    from localforge.adapters.localai import LocalAIEngineAdapter
     from localforge.adapters.ollama import OllamaEngineAdapter
     from localforge.adapters.openai_compatible import OpenAICompatibleEngineAdapter
     from localforge.adapters.sglang import SglangEngineAdapter
+    from localforge.adapters.tensorrt_llm import TensorRtLlmEngineAdapter
+    from localforge.adapters.tgi import TgiEngineAdapter
+    from localforge.adapters.triton import triton_tensorrt_llm_catalog_manifest
     from localforge.adapters.vllm import VllmEngineAdapter
 
     catalog = AdapterCatalog()
@@ -238,6 +263,13 @@ def default_adapter_catalog() -> AdapterCatalog:
     catalog.register(OllamaEngineAdapter())
     catalog.register(VllmEngineAdapter())
     catalog.register(SglangEngineAdapter())
+    catalog.register(TensorRtLlmEngineAdapter())
+    catalog.register(LmDeployEngineAdapter())
+    catalog.register(LightLlmEngineAdapter())
+    catalog.register(TgiEngineAdapter())
+    catalog.register(LocalAIEngineAdapter())
+    catalog.register(KoboldCppEngineAdapter())
+    catalog.register_catalog_entry(triton_tensorrt_llm_catalog_manifest())
     return catalog
 
 
@@ -245,8 +277,8 @@ def _native_metric_is_declared(name: str, declarations: list[str]) -> bool:
     if name in declarations:
         return True
     return any(
-        declaration.endswith(":*")
+        declaration.endswith("*")
         and name.startswith(declaration[:-1])
-        and len(name) > len(declaration) - 1
+        and len(name) > len(declaration[:-1])
         for declaration in declarations
     )

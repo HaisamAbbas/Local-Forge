@@ -46,7 +46,7 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     catalog = default_adapter_catalog()
     manifests = catalog.list_manifests()
 
-    assert len(manifests) == 6
+    assert len(manifests) == 13
     manifest = next(item for item in manifests if item.adapter_id == FAKE_ADAPTER_ID)
     assert isinstance(manifest, AdapterManifest)
     assert manifest.adapter_id == FAKE_ADAPTER_ID
@@ -80,6 +80,10 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     assert vllm.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert sglang.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert vllm.adapter_id != sglang.adapter_id
+    triton = next(item for item in manifests if item.adapter_id == "localforge.triton_tensorrt_llm")
+    assert triton.implementation_status == "planned"
+    assert triton.integration_modes == []
+    assert triton.version_tested == []
 
     with pytest.raises(ValidationError, match="adapter_id"):
         AdapterManifest.model_validate(

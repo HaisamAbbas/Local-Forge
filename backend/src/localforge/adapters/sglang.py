@@ -32,6 +32,7 @@ class SglangEngineAdapter(OpenAIServingEngineAdapter):
     docs_url = "https://docs.sglang.ai/basic_usage/openai_api.html"
     default_port = 30000
     unsafe_routes = frozenset({"server_info", "get_server_info"})
+    tested_versions = ("0.4.9 (local API fixture)",)
 
     def __init__(
         self,

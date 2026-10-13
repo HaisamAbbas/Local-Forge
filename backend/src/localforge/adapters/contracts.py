@@ -47,8 +47,13 @@ class AdapterManifest(SchemaModel):
     display_name: str = Field(min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=1000)
     category: AdapterCategory
-    integration_modes: list[EngineIntegrationMode] = Field(min_length=1)
+    integration_modes: list[EngineIntegrationMode] = Field(default_factory=list)
     operating_systems: list[AdapterPlatform] = Field(default_factory=list)
+    implementation_status: Literal["implemented", "planned", "unsupported"] = "implemented"
+    version_tested: list[str] = Field(default_factory=list, max_length=16)
+    maintenance_mode: bool = False
+    recommended_for_new_managed_install: bool = True
+    status_details: str | None = Field(default=None, max_length=500)
     declared_capabilities: set[str] = Field(default_factory=set)
     supported_transports: list[str] = Field(default_factory=list)
     native_metrics: list[str] = Field(default_factory=list)
@@ -67,8 +72,8 @@ class AdapterManifest(SchemaModel):
     @classmethod
     def native_metric_patterns_must_be_explicit(cls, value: list[str]) -> list[str]:
         for name in value:
-            if "*" in name and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,119}:\*", name):
-                raise ValueError("native metric wildcards must be a lowercase namespace prefix")
+            if "*" in name and not re.fullmatch(r"[a-z][a-z0-9_.:-]{0,119}\*", name):
+                raise ValueError("native metric wildcards must be a lowercase metric prefix")
         return value
 
 
@@ -238,12 +243,22 @@ class MetricsResult(SchemaModel):
 AdapterStreamEvent.model_rebuild()
 
 
+class RuntimeStackLayer(SchemaModel):
+    """One independently identified layer in a serving stack fingerprint."""
+
+    layer_type: Literal["wrapper", "backend", "runtime", "server", "orchestrator", "worker"]
+    name: str = Field(min_length=1, max_length=160)
+    version: str | None = Field(default=None, max_length=120)
+    source: Literal["engine_reported", "verified_config"]
+
+
 class RuntimeFingerprint(SchemaModel):
     adapter_id: str
     adapter_version: str
     engine_version: str | None = None
     runtime_name: str | None = None
     runtime_version: str | None = None
+    stack_layers: list[RuntimeStackLayer] = Field(default_factory=list, max_length=32)
     settings: dict[str, JsonValue] = Field(default_factory=dict)
     collected_at: datetime = Field(default_factory=utc_now)
 

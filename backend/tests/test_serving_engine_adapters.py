@@ -5,16 +5,27 @@ import json
 
 import pytest
 
-from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
+from localforge.adapters.catalog import (
+    AdapterCatalog,
+    AdapterNotFoundError,
+    default_adapter_catalog,
+)
 from localforge.adapters.contracts import (
     AdapterConfiguration,
     GenerationRequest,
     ProbeStatus,
     StreamEventType,
 )
+from localforge.adapters.koboldcpp import KOBOLDCPP_ADAPTER_ID, KoboldCppEngineAdapter
+from localforge.adapters.lightllm import LIGHTLLM_ADAPTER_ID, LightLlmEngineAdapter
+from localforge.adapters.lmdeploy import LMDEPLOY_ADAPTER_ID, LmDeployEngineAdapter
+from localforge.adapters.localai import LOCALAI_ADAPTER_ID, LocalAIEngineAdapter
 from localforge.adapters.openai_compatible import AdapterOperationUnsupported
 from localforge.adapters.prometheus import parse_engine_prometheus
 from localforge.adapters.sglang import SGLANG_ADAPTER_ID, SglangEngineAdapter
+from localforge.adapters.tensorrt_llm import TENSORRT_LLM_ADAPTER_ID, TensorRtLlmEngineAdapter
+from localforge.adapters.tgi import TGI_ADAPTER_ID, TgiEngineAdapter
+from localforge.adapters.triton import TRITON_TENSORRT_LLM_ADAPTER_ID
 from localforge.adapters.vllm import VLLM_ADAPTER_ID, VllmEngineAdapter
 from localforge.core.models import CapabilitySupport, EngineIntegrationMode
 from tests.adapter_contract import assert_registered_adapter_contract
@@ -53,8 +64,279 @@ def test_default_catalog_registers_vllm_and_sglang_as_distinct_connectors() -> N
             assert VLLM_ADAPTER_ID in identifiers
             assert SGLANG_ADAPTER_ID in identifiers
             assert VLLM_ADAPTER_ID != SGLANG_ADAPTER_ID
+            assert {
+                TENSORRT_LLM_ADAPTER_ID,
+                LMDEPLOY_ADAPTER_ID,
+                LIGHTLLM_ADAPTER_ID,
+                TGI_ADAPTER_ID,
+                LOCALAI_ADAPTER_ID,
+                KOBOLDCPP_ADAPTER_ID,
+                TRITON_TENSORRT_LLM_ADAPTER_ID,
+            } <= identifiers
+            triton = next(
+                item
+                for item in catalog.list_manifests()
+                if item.adapter_id == TRITON_TENSORRT_LLM_ADAPTER_ID
+            )
+            assert triton.implementation_status == "planned"
+            assert triton.integration_modes == []
+            with pytest.raises(AdapterNotFoundError):
+                catalog.get(TRITON_TENSORRT_LLM_ADAPTER_ID)
         finally:
             await catalog.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "adapter_id", "engine", "namespace", "version", "metrics"),
+    [
+        (
+            TensorRtLlmEngineAdapter,
+            TENSORRT_LLM_ADAPTER_ID,
+            "tensorrt_llm",
+            "tensorrt_llm",
+            "1.3",
+            "# TYPE trtllm_request_success_total counter\ntrtllm_request_success_total 4\n",
+        ),
+        (
+            LmDeployEngineAdapter,
+            LMDEPLOY_ADAPTER_ID,
+            "lmdeploy",
+            "lmdeploy",
+            None,
+            "# TYPE lmdeploy:requests_total counter\nlmdeploy:requests_total 4\n",
+        ),
+        (LightLlmEngineAdapter, LIGHTLLM_ADAPTER_ID, "lightllm", "lightllm", None, ""),
+        (
+            TgiEngineAdapter,
+            TGI_ADAPTER_ID,
+            "tgi",
+            "tgi",
+            "3.3.7",
+            "# TYPE tgi_request_count counter\ntgi_request_count 4\n",
+        ),
+        (
+            LocalAIEngineAdapter,
+            LOCALAI_ADAPTER_ID,
+            "localai",
+            "localai",
+            "4.11.0",
+            "# TYPE api_call_request_count_total counter\napi_call_request_count_total 4\n",
+        ),
+        (
+            KoboldCppEngineAdapter,
+            KOBOLDCPP_ADAPTER_ID,
+            "koboldcpp",
+            "koboldcpp",
+            "1.122.1",
+            "",
+        ),
+    ],
+)
+def test_additional_connectors_pass_shared_contract_and_report_fixture_coverage(
+    adapter_type: type,
+    adapter_id: str,
+    engine: str,
+    namespace: str,
+    version: str | None,
+    metrics: str,
+) -> None:
+    async def run() -> None:
+        server = ServingEngineServer(engine=engine, version=version, metrics=metrics)
+        await server.start()
+        adapter = adapter_type()
+        catalog = AdapterCatalog()
+        manifest = catalog.register(adapter)
+        extension: dict[str, object] = {}
+        if namespace == "localai":
+            extension = {"model_id": "fixture-model", "discover_backend": True}
+        config = _config(server.endpoint_url, namespace, extension=extension)
+        try:
+            assert manifest.implementation_status == "implemented"
+            assert manifest.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+            assert manifest.operating_systems
+            assert manifest.documentation_url
+            assert manifest.version_tested
+            assert any("local API fixture" in value for value in manifest.version_tested)
+            assert ("prometheus_text" in manifest.supported_transports) is bool(
+                manifest.native_metrics
+            )
+            await assert_registered_adapter_contract(catalog, adapter_id, config)
+            probe = await catalog.probe(adapter_id, config)
+            assert probe.status is ProbeStatus.SUCCEEDED
+            assert probe.engine_version == version
+            if manifest.native_metrics:
+                result = await catalog.read_metrics(adapter_id, config)
+                assert result.available
+                assert result.metrics
+                assert all(item.source.value == "engine_native" for item in result.metrics)
+            else:
+                result = await catalog.read_metrics(adapter_id, config)
+                assert not result.available
+                assert result.diagnostic is not None
+                assert result.diagnostic.code == "native_metrics_unsupported"
+
+            chat_requests = [
+                request
+                for request in server.requests
+                if request["method"] == "POST" and request["path"] == "/v1/chat/completions"
+            ]
+            assert chat_requests
+            assert any(request["body"].get("stream") is True for request in chat_requests)
+        finally:
+            await catalog.close()
+            await server.close()
+
+    asyncio.run(run())
+
+
+def test_localai_fingerprint_keeps_wrapper_and_verified_backend_as_separate_layers() -> None:
+    async def run() -> None:
+        server = ServingEngineServer(
+            engine="localai",
+            version="4.11.0",
+            selected_backend="llama-cpp",
+        )
+        await server.start()
+        catalog = AdapterCatalog()
+        catalog.register(LocalAIEngineAdapter())
+        config = _config(
+            server.endpoint_url,
+            "localai",
+            extension={"model_id": "fixture-model", "discover_backend": True},
+        )
+        try:
+            fingerprint = await catalog.collect_fingerprint(LOCALAI_ADAPTER_ID, config)
+            assert [
+                (layer.layer_type, layer.name, layer.version) for layer in fingerprint.stack_layers
+            ] == [
+                ("wrapper", "LocalAI", "4.11.0"),
+                ("backend", "llama-cpp", None),
+            ]
+            serialized = json.dumps(fingerprint.model_dump(mode="json"))
+            assert 'selected_backend": "llama-cpp' in serialized
+            assert "fixture-secret-value" not in serialized
+            assert "fixture-admin-secret" not in serialized
+            assert any(
+                request["path"] == "/api/models/config-json/fixture-model"
+                for request in server.requests
+            )
+        finally:
+            await catalog.close()
+            await server.close()
+
+    asyncio.run(run())
+
+
+def test_localai_unknown_backend_stays_unknown_and_unsafe_model_ids_are_not_queried() -> None:
+    async def run() -> None:
+        server = ServingEngineServer(
+            engine="localai",
+            version="4.11.0",
+            selected_backend=None,
+            backend_status=403,
+        )
+        await server.start()
+        catalog = AdapterCatalog()
+        catalog.register(LocalAIEngineAdapter())
+        unauthorized_config = _config(
+            server.endpoint_url,
+            "localai",
+            extension={"model_id": "fixture-model", "discover_backend": True},
+        )
+        unsafe_config = _config(
+            server.endpoint_url,
+            "localai",
+            extension={"model_id": "../private", "discover_backend": True},
+        )
+        try:
+            unauthorized = await catalog.collect_fingerprint(
+                LOCALAI_ADAPTER_ID, unauthorized_config
+            )
+            assert [layer.layer_type for layer in unauthorized.stack_layers] == ["wrapper"]
+            assert unauthorized.settings["localai"]["backend_discovery"] == "unauthorized"
+            before = len(server.requests)
+            unsafe = await catalog.collect_fingerprint(LOCALAI_ADAPTER_ID, unsafe_config)
+            assert [layer.layer_type for layer in unsafe.stack_layers] == ["wrapper"]
+            assert unsafe.settings["localai"]["backend_discovery"] == "invalid_model_id"
+            assert not any(
+                request["path"].startswith("/api/models/config-json/")
+                for request in server.requests[before:]
+            )
+        finally:
+            await catalog.close()
+            await server.close()
+
+    asyncio.run(run())
+
+
+def test_tgi_maintenance_and_managed_install_status_are_explicit() -> None:
+    manifest = TgiEngineAdapter().describe()
+    assert manifest.maintenance_mode
+    assert not manifest.recommended_for_new_managed_install
+    assert manifest.implementation_status == "implemented"
+    assert manifest.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+    assert "maintenance mode" in (manifest.status_details or "").casefold()
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "adapter_id", "engine", "namespace"),
+    [
+        (TensorRtLlmEngineAdapter, TENSORRT_LLM_ADAPTER_ID, "tensorrt_llm", "tensorrt_llm"),
+        (LmDeployEngineAdapter, LMDEPLOY_ADAPTER_ID, "lmdeploy", "lmdeploy"),
+        (LightLlmEngineAdapter, LIGHTLLM_ADAPTER_ID, "lightllm", "lightllm"),
+        (TgiEngineAdapter, TGI_ADAPTER_ID, "tgi", "tgi"),
+        (LocalAIEngineAdapter, LOCALAI_ADAPTER_ID, "localai", "localai"),
+        (KoboldCppEngineAdapter, KOBOLDCPP_ADAPTER_ID, "koboldcpp", "koboldcpp"),
+    ],
+)
+def test_additional_connectors_sanitize_errors_and_bound_stream_timeouts(
+    adapter_type: type,
+    adapter_id: str,
+    engine: str,
+    namespace: str,
+) -> None:
+    async def run() -> None:
+        failed_server = ServingEngineServer(engine=engine, chat_status=500)
+        await failed_server.start()
+        failed_catalog = AdapterCatalog()
+        failed_catalog.register(adapter_type())
+        failed_config = _config(failed_server.endpoint_url, namespace)
+        try:
+            prepared = await failed_catalog.prepare_request(
+                adapter_id,
+                failed_config,
+                GenerationRequest(model_ref="fixture-model", prompt="private fixture prompt"),
+            )
+            events = [event async for event in failed_catalog.stream_request(adapter_id, prepared)]
+            assert events[-1].event_type is StreamEventType.ERROR
+            assert "fixture-secret-value" not in str([event.model_dump() for event in events])
+        finally:
+            await failed_catalog.close()
+            await failed_server.close()
+
+        slow_server = ServingEngineServer(engine=engine, chat_delay=0.25)
+        await slow_server.start()
+        slow_catalog = AdapterCatalog()
+        slow_catalog.register(adapter_type())
+        slow_config = _config(
+            slow_server.endpoint_url,
+            namespace,
+            extension={"timeout_seconds": 0.1},
+        )
+        try:
+            prepared = await slow_catalog.prepare_request(
+                adapter_id,
+                slow_config,
+                GenerationRequest(model_ref="fixture-model", prompt="bounded fixture prompt"),
+            )
+            events = [event async for event in slow_catalog.stream_request(adapter_id, prepared)]
+            assert events[-1].event_type is StreamEventType.TIMEOUT
+            assert events[-1].error_code == "endpoint_timeout"
+        finally:
+            await slow_catalog.close()
+            await slow_server.close()
 
     asyncio.run(run())
 

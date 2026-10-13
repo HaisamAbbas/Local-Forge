@@ -142,8 +142,8 @@ def _sample_component(name: str, types: dict[str, str]) -> tuple[str, str, str]:
 def parse_engine_prometheus(text: str, *, metric_prefix: str) -> PrometheusParseResult:
     """Keep finite samples for one engine namespace and attach their raw definitions."""
 
-    if not _METRIC_NAME.fullmatch(metric_prefix.rstrip(":")) or not metric_prefix.endswith(":"):
-        raise ValueError("metric_prefix must be a Prometheus namespace ending in ':'")
+    if not _METRIC_NAME.fullmatch(metric_prefix):
+        raise ValueError("metric_prefix must be a valid Prometheus metric-name prefix")
 
     help_by_name: dict[str, str] = {}
     types: dict[str, str] = {}
