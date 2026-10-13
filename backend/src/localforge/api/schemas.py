@@ -139,6 +139,15 @@ class RemoteEgressDisclosure(SchemaModel):
     request_will_be_sent: bool = False
 
 
+class PlaygroundRequest(SchemaModel):
+    profile_id: UUID
+    model_ref: str = Field(min_length=1, max_length=500)
+    prompt: str = Field(min_length=1, max_length=32_000)
+    max_tokens: int = Field(default=512, ge=1, le=8192)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    confirm_remote_egress: bool = False
+
+
 class WorkloadCreate(SchemaModel):
     name: str = Field(min_length=1, max_length=160)
     kind: WorkloadKind
