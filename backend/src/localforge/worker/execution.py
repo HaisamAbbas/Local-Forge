@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
+import psutil
+
 from localforge.adapters.catalog import (
     AdapterCatalog,
     AdapterNotFoundError,
@@ -34,6 +36,7 @@ from localforge.core.models import (
     EngineProfile,
     JsonValue,
     MetricSample,
+    MetricSource,
     ModelArtifact,
     PromptSizingMethod,
     RequestOutcome,
@@ -66,6 +69,214 @@ CANCEL_DRAIN_SECONDS = 2.0
 MAX_WORKER_CONCURRENCY = 128
 HEARTBEAT_INTERVAL_SECONDS = 0.5
 CONTROL_POLL_INTERVAL_SECONDS = 0.05
+SYSTEM_SAMPLE_INTERVAL_SECONDS = 1.0
+MIN_CPU_SAMPLE_INTERVAL_SECONDS = 0.1
+
+
+class _WorkerResourceSampler:
+    """Persist best-effort host and worker process measurements for a run."""
+
+    def __init__(self, connection: sqlite3.Connection, run_id: UUID) -> None:
+        self._connection = connection
+        self._run_id = run_id
+        self._process_id = os.getpid()
+        try:
+            self._process: psutil.Process | None = psutil.Process(self._process_id)
+        except psutil.Error:
+            self._process = None
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+        self._sample_index = 0
+        self._last_cpu_sample_at = time.perf_counter()
+
+    def start(self) -> None:
+        # Prime psutil's interval counters; the first CPU values are not observations.
+        try:
+            psutil.cpu_percent(interval=None)
+        except psutil.Error:
+            pass
+        if self._process is not None:
+            try:
+                self._process.cpu_percent(interval=None)
+            except psutil.Error:
+                pass
+        self._sample(include_cpu=False)
+        self._task = asyncio.create_task(self._sample_loop())
+
+    async def finish(self) -> None:
+        if self._task is None:
+            return
+        self._stop.set()
+        await self._task
+        elapsed = time.perf_counter() - self._last_cpu_sample_at
+        if elapsed < MIN_CPU_SAMPLE_INTERVAL_SECONDS:
+            await asyncio.sleep(MIN_CPU_SAMPLE_INTERVAL_SECONDS - elapsed)
+        self._sample(include_cpu=True)
+        self._task = None
+
+    async def _sample_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=SYSTEM_SAMPLE_INTERVAL_SECONDS)
+            except TimeoutError:
+                self._sample(include_cpu=True)
+
+    def _sample(self, *, include_cpu: bool) -> None:
+        observed_at = datetime.now(UTC)
+        labels = {
+            "process_id": str(self._process_id),
+            "sample_index": str(self._sample_index),
+        }
+        cpu_labels = {
+            **labels,
+            "interval_seconds": f"{max(0.0, time.perf_counter() - self._last_cpu_sample_at):.3f}",
+        }
+        samples: list[MetricSample] = []
+
+        try:
+            memory = psutil.virtual_memory()
+            samples.extend(
+                [
+                    self._metric(
+                        "host_memory_used_percent",
+                        memory.percent,
+                        "%",
+                        "Operating-system-reported fraction of host memory in use.",
+                        "psutil.virtual_memory().percent",
+                        scope="local_host",
+                        labels=labels,
+                        observed_at=observed_at,
+                    ),
+                    self._metric(
+                        "host_memory_available_bytes",
+                        memory.available,
+                        "bytes",
+                        "Operating-system-reported host memory available without swapping.",
+                        "psutil.virtual_memory().available",
+                        scope="local_host",
+                        labels=labels,
+                        observed_at=observed_at,
+                    ),
+                ]
+            )
+        except (psutil.Error, OSError, AttributeError):
+            pass
+
+        if self._process is not None:
+            try:
+                process_memory = self._process.memory_info()
+                samples.append(
+                    self._metric(
+                        "worker_process_rss_bytes",
+                        process_memory.rss,
+                        "bytes",
+                        "Resident memory of the LOCALFORGE benchmark worker process.",
+                        "psutil.Process.memory_info().rss",
+                        scope="benchmark_worker",
+                        labels=labels,
+                        observed_at=observed_at,
+                    )
+                )
+            except (psutil.Error, OSError, AttributeError):
+                pass
+
+        if include_cpu:
+            try:
+                samples.append(
+                    self._metric(
+                        "host_cpu_percent",
+                        psutil.cpu_percent(interval=None),
+                        "%",
+                        "Operating-system-reported CPU utilization across the LOCALFORGE host.",
+                        "psutil.cpu_percent() over the interval since the previous host sample",
+                        scope="local_host",
+                        labels=cpu_labels,
+                        observed_at=observed_at,
+                    )
+                )
+            except (psutil.Error, OSError, AttributeError):
+                pass
+            if self._process is not None:
+                try:
+                    samples.append(
+                        self._metric(
+                            "worker_process_cpu_percent",
+                            self._process.cpu_percent(interval=None),
+                            "% of one logical CPU",
+                            "CPU utilization of the LOCALFORGE worker; values may exceed 100%.",
+                            "psutil.Process.cpu_percent() over the interval since the previous "
+                            "sample",
+                            scope="benchmark_worker",
+                            labels=cpu_labels,
+                            observed_at=observed_at,
+                        )
+                    )
+                except (psutil.Error, OSError, AttributeError):
+                    pass
+            self._last_cpu_sample_at = time.perf_counter()
+
+        try:
+            with transaction(self._connection):
+                for sample in samples:
+                    MetricSampleRepository(self._connection).create(sample)
+            emit_run_event(
+                self._connection,
+                self._run_id,
+                "system_sample",
+                {
+                    "scope": "benchmark_worker",
+                    "process_id": self._process_id,
+                    "sample_index": self._sample_index,
+                    "sampled_at": observed_at.isoformat(),
+                    "available": bool(samples),
+                    "metrics": cast(
+                        JsonValue,
+                        [
+                            {
+                                "metric_name": sample.metric_name,
+                                "value": sample.value,
+                                "unit": sample.unit,
+                                "source": sample.source.value,
+                                "labels": sample.labels,
+                            }
+                            for sample in samples
+                        ],
+                    ),
+                    "reason": None if samples else "host_sampler_unavailable",
+                },
+            )
+        except (OSError, sqlite3.Error):
+            # Resource sampling is diagnostic; it must not turn a valid benchmark into a failure.
+            pass
+        self._sample_index += 1
+
+    def _metric(
+        self,
+        metric_name: str,
+        value: float | int,
+        unit: str,
+        definition: str,
+        formula: str,
+        *,
+        scope: str,
+        labels: dict[str, str],
+        observed_at: datetime,
+    ) -> MetricSample:
+        return MetricSample(
+            run_id=self._run_id,
+            metric_name=metric_name,
+            value=float(value),
+            unit=unit,
+            source=MetricSource.SYSTEM_OBSERVED,
+            aggregation="sample",
+            sample_count=1,
+            definition=definition,
+            formula=formula,
+            method_version="localforge.resource_sampler.v1",
+            metric_kind="gauge",
+            observed_at=observed_at,
+            labels={**labels, "scope": scope},
+        )
 
 
 class RunSetupError(RuntimeError):
@@ -797,6 +1008,12 @@ async def execute_run(
                     return
 
         monitor = asyncio.create_task(watch_run())
+        system_sampler: _WorkerResourceSampler | None = None
+
+        async def finish_system_sampler() -> None:
+            if system_sampler is not None:
+                await system_sampler.finish()
+
         try:
             transition_run(connection, run_id, BenchmarkRunStatus.PREPARING)
             run, plan, workload, engine, model_ref, prompt_for = _load_run_context(
@@ -876,17 +1093,8 @@ async def execute_run(
 
             transition_run(connection, run_id, BenchmarkRunStatus.RUNNING)
             counts: Counter[str] = Counter()
-            emit_run_event(
-                connection,
-                run_id,
-                "system_sample",
-                {
-                    "scope": "benchmark_worker",
-                    "process_id": os.getpid(),
-                    "available": False,
-                    "reason": "host_sampler_not_configured",
-                },
-            )
+            system_sampler = _WorkerResourceSampler(connection, run_id)
+            system_sampler.start()
             native_before = await _capture_native_metrics(
                 connection=connection,
                 catalog=catalog,
@@ -1072,6 +1280,7 @@ async def execute_run(
                     "warning",
                     {"code": code, "message": message},
                 )
+            await finish_system_sampler()
             current = RecordRepository(connection, BenchmarkRun).get(run_id)
             if current is None:
                 return 2
@@ -1087,6 +1296,7 @@ async def execute_run(
             finalize_request_metrics(connection, run_id)
             transition_run(connection, run_id, final)
         except AdapterDrainTimeoutError:
+            await finish_system_sampler()
             current = RecordRepository(connection, BenchmarkRun).get(run_id)
             if current is not None and current.status is BenchmarkRunStatus.CANCELLING:
                 _finish_stop_request(connection, current)
@@ -1103,6 +1313,7 @@ async def execute_run(
                 )
             return 1
         except RunSetupError as error:
+            await finish_system_sampler()
             current = RecordRepository(connection, BenchmarkRun).get(run_id)
             if current is not None and current.status is BenchmarkRunStatus.CANCELLING:
                 _finish_stop_request(connection, current)
@@ -1117,6 +1328,7 @@ async def execute_run(
                 )
             return 1
         except AdapterNotFoundError:
+            await finish_system_sampler()
             current = RecordRepository(connection, BenchmarkRun).get(run_id)
             if current is not None and current.status is BenchmarkRunStatus.CANCELLING:
                 _finish_stop_request(connection, current)
@@ -1131,6 +1343,7 @@ async def execute_run(
                 )
             return 1
         except Exception:
+            await finish_system_sampler()
             current = RecordRepository(connection, BenchmarkRun).get(run_id)
             if current is not None and current.status is BenchmarkRunStatus.CANCELLING:
                 _finish_stop_request(connection, current)
@@ -1145,6 +1358,7 @@ async def execute_run(
                 )
             return 1
         finally:
+            await finish_system_sampler()
             monitor_finished.set()
             monitor.cancel()
             await asyncio.gather(monitor, return_exceptions=True)

@@ -1188,13 +1188,42 @@ def test_run_api_executes_in_child_process_and_replays_sanitized_events(tmp_path
         )
         system_event = next(event for event in events if event["event_type"] == "system_sample")
         assert system_event["payload"]["process_id"] != os.getpid()
+        assert system_event["payload"]["available"] is True
+        assert any(
+            metric["metric_name"] == "worker_process_rss_bytes"
+            and metric["source"] == MetricSource.SYSTEM_OBSERVED.value
+            for metric in system_event["payload"]["metrics"]
+        )
         assert "LOCALFORGE synthetic benchmark request" not in json.dumps(events)
         samples = client.get(f"/api/v1/runs/{run_id}/samples").json()["samples"]
         assert len(samples) == 3
-        assert all(sample["prompt_text"] is None for sample in samples)
+        assert all(
+            sample["prompt_text"] is None
+            and sample["output_text"] is None
+            and sample["content_retained"] is False
+            for sample in samples
+        )
         metrics_response = client.get(f"/api/v1/runs/{run_id}/metrics")
         assert metrics_response.status_code == 200
         persisted_metrics = metrics_response.json()["metrics"]
+        system_metrics = [
+            metric
+            for metric in persisted_metrics
+            if metric["source"] == MetricSource.SYSTEM_OBSERVED.value
+        ]
+        assert {
+            "host_memory_used_percent",
+            "host_memory_available_bytes",
+            "host_cpu_percent",
+            "worker_process_rss_bytes",
+            "worker_process_cpu_percent",
+        }.issubset({metric["metric_name"] for metric in system_metrics})
+        assert all(
+            metric["method_version"] == "localforge.resource_sampler.v1"
+            and metric["aggregation"] == "sample"
+            and metric["labels"]["scope"] in {"local_host", "benchmark_worker"}
+            for metric in system_metrics
+        )
         attempted_metric = next(
             item for item in persisted_metrics if item["metric_name"] == "requests_attempted"
         )
