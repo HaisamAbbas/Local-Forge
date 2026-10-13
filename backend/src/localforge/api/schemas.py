@@ -14,15 +14,19 @@ from localforge.core.models import (
     Dataset,
     EngineIntegrationMode,
     EngineProfileStatus,
+    ExperimentGroup,
     HardwareSnapshot,
     JsonValue,
     MachineProfile,
     MetricSample,
     PromptSizingMethod,
+    ReportFormat,
+    ReportMetadata,
     RequestSample,
     RunEventRecord,
     SchemaModel,
     TrafficMode,
+    Workload,
     WorkloadInputMode,
     WorkloadKind,
     WorkloadPreset,
@@ -220,6 +224,80 @@ class BenchmarkPreflight(SchemaModel):
 class BenchmarkPlanResponse(SchemaModel):
     plan: BenchmarkPlan
     preflight: BenchmarkPreflight
+
+
+class BenchmarkPlanSettings(SchemaModel):
+    name: str = Field(min_length=1, max_length=160)
+    engine_profile_id: UUID
+    machine_profile_id: UUID | None = None
+    model_artifact_id: UUID | None = None
+    warmup_requests: int = Field(default=0, ge=0)
+    measured_requests: int | None = Field(default=100, ge=1)
+    measurement_duration_seconds: float | None = Field(default=None, gt=0, le=86_400)
+    concurrency: int = Field(default=1, ge=1)
+    timeout_seconds: float = Field(default=120, gt=0)
+    retain_prompt_output: bool = False
+    dataset_snapshot_hash: str | None = None
+
+
+class BenchmarkPlanExport(SchemaModel):
+    format_version: int = Field(default=1, ge=1, le=1)
+    app_version: str = Field(min_length=1, max_length=40)
+    database_schema_version: int = Field(ge=1)
+    exported_at: datetime
+    workload: Workload
+    plan: BenchmarkPlanSettings
+
+
+class ExperimentVariantInput(SchemaModel):
+    name: str = Field(min_length=1, max_length=120)
+    value: JsonValue
+
+
+class ExperimentGroupCreate(SchemaModel):
+    name: str = Field(min_length=1, max_length=160)
+    baseline_plan_id: UUID
+    independent_variable: str = Field(min_length=1, max_length=160)
+    variants: list[ExperimentVariantInput] = Field(min_length=1, max_length=19)
+    repetitions: int = Field(default=1, ge=1, le=10)
+    randomize_order: bool = False
+    order_seed: int = Field(default=0, ge=0, le=2**63 - 1)
+    hypothesis: str | None = Field(default=None, max_length=2000)
+
+
+class ExperimentGroupCreateResponse(SchemaModel):
+    group: ExperimentGroup
+    estimated_run_count: int = Field(ge=1, le=20)
+    estimated_duration_seconds: float | None = Field(default=None, ge=0)
+
+
+class ExperimentStartRequest(SchemaModel):
+    confirm_estimated_runtime: bool = False
+
+
+class RunComparisonRequest(SchemaModel):
+    run_ids: list[UUID] = Field(min_length=2, max_length=20)
+    baseline_run_id: UUID | None = None
+    declared_variable: str | None = Field(default=None, max_length=160)
+
+
+class ExperimentNextTrialResponse(SchemaModel):
+    group: ExperimentGroup
+    run: BenchmarkRun | None = None
+
+
+class ReportCreate(SchemaModel):
+    name: str = Field(min_length=1, max_length=160)
+    filename: str | None = Field(default=None, min_length=1, max_length=160)
+    format: ReportFormat
+    run_ids: list[UUID] = Field(min_length=1, max_length=20)
+    baseline_run_id: UUID | None = None
+    experiment_group_id: UUID | None = None
+    include_retained_content: bool = False
+
+
+class ReportCreateResponse(SchemaModel):
+    report: ReportMetadata
 
 
 class RunStartRequest(SchemaModel):

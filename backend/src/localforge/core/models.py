@@ -785,11 +785,59 @@ class ExperimentGroupStatus(StrEnum):
     FAILED = "failed"
 
 
+class ExperimentTrialStatus(StrEnum):
+    PENDING = "pending"
+    LAUNCHING = "launching"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ExperimentVariant(SchemaModel):
+    name: str = Field(min_length=1, max_length=120)
+    value: JsonValue
+
+
+class ExperimentTrial(SchemaModel):
+    order: int = Field(ge=0)
+    variant_name: str = Field(min_length=1, max_length=120)
+    variant_value: JsonValue
+    repetition: int = Field(ge=1, le=10)
+    plan_id: UUID
+    run_id: UUID | None = None
+    status: ExperimentTrialStatus = ExperimentTrialStatus.PENDING
+    launch_started_at: datetime | None = None
+    error: str | None = Field(default=None, max_length=500)
+
+    @field_validator("launch_started_at")
+    @classmethod
+    def launch_timestamp_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("timestamp must include a timezone")
+        return value.astimezone(UTC) if value is not None else None
+
+
 class ExperimentGroup(DomainModel):
     name: str = Field(min_length=1, max_length=160)
     status: ExperimentGroupStatus = ExperimentGroupStatus.DRAFT
     run_ids: list[UUID] = Field(default_factory=list)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=2000)
+    baseline_plan_id: UUID | None = None
+    independent_variable: str | None = Field(default=None, max_length=160)
+    baseline_value: JsonValue = None
+    variants: list[ExperimentVariant] = Field(default_factory=list, max_length=20)
+    repetitions: int = Field(default=1, ge=1, le=10)
+    randomize_order: bool = False
+    order_seed: int = Field(default=0, ge=0, le=2**63 - 1)
+    estimated_duration_seconds: float | None = Field(default=None, ge=0)
+    trials: list[ExperimentTrial] = Field(default_factory=list, max_length=20)
+
+    @field_validator("estimated_duration_seconds")
+    @classmethod
+    def estimated_duration_must_be_finite(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("estimated duration must be finite")
+        return value
 
 
 class ReportFormat(StrEnum):
@@ -809,8 +857,11 @@ class ReportMetadata(DomainModel):
     status: ReportStatus = ReportStatus.READY
     run_ids: list[UUID] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=utc_now)
-    export_ref: str | None = None
-    redacted_summary: str | None = None
+    export_ref: str | None = Field(default=None, max_length=500)
+    filename: str | None = Field(default=None, max_length=200)
+    content_included: bool = False
+    error_message: str | None = Field(default=None, max_length=500)
+    redacted_summary: str | None = Field(default=None, max_length=1000)
 
     @field_validator("generated_at")
     @classmethod
