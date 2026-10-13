@@ -138,7 +138,35 @@ class AdapterCatalog:
     def stream_request(
         self, adapter_id: str, request: PreparedRequest
     ) -> AsyncIterator[AdapterStreamEvent]:
-        return self._runner.stream(self.get(adapter_id).stream_request, request)
+        manifest = self.manifest_for(adapter_id)
+        stream = self._runner.stream(self.get(adapter_id).stream_request, request)
+
+        async def validate_events() -> AsyncIterator[AdapterStreamEvent]:
+            async for event in stream:
+                if event.native_metrics:
+                    metric_capabilities = {"native_metrics", "server_reported_durations"}
+                    if not manifest.declared_capabilities.intersection(metric_capabilities):
+                        raise AdapterCapabilityClaimError(
+                            f"Adapter '{adapter_id}' returned native metrics it did not declare."
+                        )
+                    undeclared_metrics = {
+                        metric.metric_name for metric in event.native_metrics
+                    } - set(manifest.native_metrics)
+                    if undeclared_metrics:
+                        names = ", ".join(sorted(undeclared_metrics))
+                        raise AdapterCapabilityClaimError(
+                            f"Adapter '{adapter_id}' returned undeclared native metrics: {names}."
+                        )
+                    if any(
+                        metric.source.value != "engine_native" for metric in event.native_metrics
+                    ):
+                        raise AdapterCapabilityClaimError(
+                            f"Adapter '{adapter_id}' returned request metrics with an invalid "
+                            "source."
+                        )
+                yield event
+
+        return validate_events()
 
     async def read_metrics(self, adapter_id: str, config: AdapterConfiguration) -> MetricsResult:
         self._validate_mode(adapter_id, config)
@@ -192,10 +220,12 @@ def default_adapter_catalog() -> AdapterCatalog:
 
     from localforge.adapters.fake import FakeEngineAdapter
     from localforge.adapters.llama_cpp import LlamaCppEngineAdapter
+    from localforge.adapters.ollama import OllamaEngineAdapter
     from localforge.adapters.openai_compatible import OpenAICompatibleEngineAdapter
 
     catalog = AdapterCatalog()
     catalog.register(FakeEngineAdapter())
     catalog.register(OpenAICompatibleEngineAdapter())
     catalog.register(LlamaCppEngineAdapter())
+    catalog.register(OllamaEngineAdapter())
     return catalog

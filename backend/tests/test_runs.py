@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from localforge.adapters.catalog import AdapterCatalog
+from localforge.adapters.contracts import AdapterMetric, StreamEventType
 from localforge.adapters.fake import FakeEngineAdapter, FakeEngineScenario, FakeStreamFailure
 from localforge.api import runs as run_api
 from localforge.api.main import AppSettings, create_app
@@ -26,6 +27,7 @@ from localforge.core.models import (
     EngineProfileStatus,
     HardwareSnapshot,
     MachineProfile,
+    MetricSource,
     RequestOutcome,
     RequestSample,
     TrafficMode,
@@ -634,6 +636,92 @@ def test_worker_persists_native_metric_snapshots_and_counter_delta(tmp_path) -> 
         assert all(metric.engine_version == "fake-1" for metric in raw)
         assert delta.value == 2
         assert delta.metric_kind == "counter"
+    finally:
+        connection.close()
+
+
+def test_worker_persists_request_native_metrics_with_adapter_provenance(tmp_path) -> None:
+    database_path = tmp_path / "request-native-metrics.sqlite3"
+    initialize_database(database_path)
+    connection = open_database(database_path)
+    try:
+        run, plan, engine, workload = _worker_fixture(connection)
+        RecordRepository(connection, BenchmarkPlan).update(
+            BenchmarkPlan.model_validate(plan.model_dump(mode="python") | {"measured_requests": 2})
+        )
+        RecordRepository(connection, Workload).update(
+            Workload.model_validate(workload.model_dump(mode="python") | {"request_count": 2})
+        )
+        RecordRepository(connection, EngineProfile).update(
+            EngineProfile.model_validate(
+                engine.model_dump(mode="python") | {"engine_version": "fixture-ollama-server"}
+            )
+        )
+    finally:
+        connection.close()
+
+    class RequestMetricFake(FakeEngineAdapter):
+        def describe(self):
+            manifest = super().describe()
+            return manifest.model_copy(
+                update={
+                    "declared_capabilities": manifest.declared_capabilities
+                    | {"server_reported_durations"},
+                    "native_metrics": ["ollama.eval_duration"],
+                }
+            )
+
+        def stream_request(self, request):
+            source = super().stream_request(request)
+
+            async def events():
+                async for event in source:
+                    if event.event_type is StreamEventType.USAGE:
+                        event = event.model_copy(
+                            update={
+                                "native_metrics": [
+                                    AdapterMetric(
+                                        metric_name="ollama.eval_duration",
+                                        value=900_000,
+                                        unit="ns",
+                                        source=MetricSource.ENGINE_NATIVE,
+                                    )
+                                ]
+                            }
+                        )
+                    yield event
+
+            return events()
+
+    catalog = AdapterCatalog()
+    catalog.register(RequestMetricFake())
+    result = asyncio.run(
+        execute_run(
+            run_id=run.id,
+            database_path=database_path,
+            data_directory=tmp_path,
+            app_instance_id="test-app",
+            worker_id=run.worker_id or "",
+            catalog_factory=lambda: catalog,
+        )
+    )
+    assert result == 0
+
+    connection = open_database(database_path)
+    try:
+        metrics = MetricSampleRepository(connection).list_for_run(run.id)
+        request_metrics = [
+            item
+            for item in metrics
+            if item.metric_name == "ollama.eval_duration" and "request_id" in item.labels
+        ]
+        assert len(request_metrics) == 2
+        assert all(item.value == 900_000 and item.unit == "ns" for item in request_metrics)
+        assert all(item.source is MetricSource.ENGINE_NATIVE for item in request_metrics)
+        assert all(item.adapter_id == "localforge.fake" for item in request_metrics)
+        assert all(item.engine_version == "fixture-ollama-server" for item in request_metrics)
+        assert all(item.labels["phase"] == "measurement" for item in request_metrics)
+        assert all("request_id" in item.labels for item in request_metrics)
     finally:
         connection.close()
 

@@ -33,6 +33,7 @@ from localforge.core.models import (
     DatasetStatus,
     EngineProfile,
     JsonValue,
+    MetricSample,
     ModelArtifact,
     PromptSizingMethod,
     RequestOutcome,
@@ -308,6 +309,7 @@ async def _execute_request(
     effective_concurrency: int | None = None,
     scheduled_at: float | None = None,
     run_monotonic_origin_ns: int,
+    engine_version: str | None,
     timeout_seconds: float,
     cancellation_requested: asyncio.Event,
     counts: Counter[str],
@@ -406,21 +408,52 @@ async def _execute_request(
                     request_id=request_id,
                 )
                 chunk_index += 1
-            elif event.event_type is StreamEventType.USAGE and event.usage is not None:
-                input_tokens = event.usage.input_tokens
-                output_tokens = event.usage.output_tokens
-                usage_exact = event.usage.exact
-                emit_run_event(
-                    connection,
-                    run_id,
-                    "engine_usage",
-                    {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "exact": usage_exact,
-                    },
-                    request_id=request_id,
-                )
+            elif event.event_type is StreamEventType.USAGE:
+                if event.usage is not None:
+                    input_tokens = event.usage.input_tokens
+                    output_tokens = event.usage.output_tokens
+                    usage_exact = event.usage.exact
+                    emit_run_event(
+                        connection,
+                        run_id,
+                        "engine_usage",
+                        {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "exact": usage_exact,
+                        },
+                        request_id=request_id,
+                    )
+                if event.native_metrics:
+                    manifest = catalog.manifest_for(adapter_id)
+                    metric_repository = MetricSampleRepository(connection)
+                    for metric in event.native_metrics:
+                        metric_repository.create(
+                            MetricSample(
+                                run_id=run_id,
+                                metric_name=metric.metric_name,
+                                value=metric.value,
+                                unit=metric.unit,
+                                source=metric.source,
+                                aggregation="raw",
+                                sample_count=1,
+                                definition=(
+                                    "Ollama server-reported timing for an individual chat request."
+                                ),
+                                formula="reported value in nanoseconds",
+                                method_version="ollama.api.chat.v1",
+                                metric_kind=metric.kind,
+                                adapter_id=manifest.adapter_id,
+                                adapter_version=manifest.adapter_version,
+                                engine_version=engine_version,
+                                observed_at=metric.observed_at,
+                                labels={
+                                    **metric.labels,
+                                    "request_id": str(request_id),
+                                    "phase": phase,
+                                },
+                            )
+                        )
             elif event.event_type is StreamEventType.COMPLETED:
                 observed_terminal = StreamEventType.COMPLETED
             elif event.event_type in {
@@ -724,6 +757,7 @@ async def execute_run(
                             concurrency_level=_level,
                             effective_concurrency=1,
                             run_monotonic_origin_ns=run_monotonic_origin_ns,
+                            engine_version=engine.engine_version,
                             timeout_seconds=plan.timeout_seconds,
                             cancellation_requested=cancellation_requested,
                             counts=warmup_counts,
@@ -905,6 +939,7 @@ async def execute_run(
                             effective_concurrency=effective_concurrency_level,
                             scheduled_at=scheduled_at,
                             run_monotonic_origin_ns=run_monotonic_origin_ns,
+                            engine_version=engine.engine_version,
                             timeout_seconds=plan.timeout_seconds,
                             cancellation_requested=cancellation_requested,
                             counts=counts,

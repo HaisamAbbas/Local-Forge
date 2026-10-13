@@ -11,7 +11,7 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
 
     assert response.status_code == 200
     manifests = response.json()
-    assert len(manifests) == 3
+    assert len(manifests) == 4
     fake = next(item for item in manifests if item["adapter_id"] == "localforge.fake")
     assert fake["adapter_version"] == "1.0.0"
     assert fake["category"] == "test_fixture"
@@ -25,3 +25,6 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
     llama_cpp = next(item for item in manifests if item["adapter_id"] == "localforge.llama_cpp")
     assert llama_cpp["integration_modes"] == ["attached_endpoint", "managed_process"]
     assert "b11580" in llama_cpp["description"]
+    ollama = next(item for item in manifests if item["adapter_id"] == "localforge.ollama")
+    assert ollama["integration_modes"] == ["attached_endpoint"]
+    assert "server_reported_durations" in ollama["declared_capabilities"]

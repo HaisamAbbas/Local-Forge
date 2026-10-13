@@ -178,6 +178,24 @@ def _persist_probe_models(
         )
         existing = existing_by_ref.get(model.model_ref)
         if existing is None:
+            model_extensions: dict[str, dict[str, JsonValue]] = {}
+            if profile.adapter_id == "localforge.ollama":
+                model_extensions["ollama"] = {
+                    key: value
+                    for key, value in model.metadata.items()
+                    if key
+                    in {
+                        "runner",
+                        "runner_state",
+                        "format",
+                        "family",
+                        "families",
+                        "parameter_size",
+                        "quantization_level",
+                        "digest",
+                    }
+                    and isinstance(value, (str, int, float, bool, list, dict))
+                }
             repository.create(
                 ModelArtifact(
                     display_name=model.display_name,
@@ -189,6 +207,7 @@ def _persist_probe_models(
                     tokenizer_identity=tokenizer_identity,
                     max_context_tokens=max_context_tokens,
                     status=ModelArtifactStatus.AVAILABLE,
+                    engine_extensions=model_extensions,
                 )
             )
         else:
@@ -205,6 +224,26 @@ def _persist_probe_models(
                 updated_metadata["tokenizer_identity"] = tokenizer_identity
             if max_context_tokens is not None:
                 updated_metadata["max_context_tokens"] = max_context_tokens
+            if profile.adapter_id == "localforge.ollama":
+                updated_metadata["engine_extensions"] = {
+                    **existing.engine_extensions,
+                    "ollama": {
+                        key: value
+                        for key, value in model.metadata.items()
+                        if key
+                        in {
+                            "runner",
+                            "runner_state",
+                            "format",
+                            "family",
+                            "families",
+                            "parameter_size",
+                            "quantization_level",
+                            "digest",
+                        }
+                        and isinstance(value, (str, int, float, bool, list, dict))
+                    },
+                }
             changed = ModelArtifact.model_validate(
                 existing.model_dump(mode="python") | updated_metadata
             )

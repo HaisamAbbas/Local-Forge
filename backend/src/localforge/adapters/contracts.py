@@ -178,6 +178,7 @@ class AdapterStreamEvent(SchemaModel):
     event_type: StreamEventType
     text: str | None = None
     usage: UsageCounts | None = None
+    native_metrics: list["AdapterMetric"] = Field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
 
@@ -224,6 +225,9 @@ class MetricsResult(SchemaModel):
     available: bool
     metrics: list[AdapterMetric] = Field(default_factory=list)
     diagnostic: AdapterDiagnostic | None = None
+
+
+AdapterStreamEvent.model_rebuild()
 
 
 class RuntimeFingerprint(SchemaModel):

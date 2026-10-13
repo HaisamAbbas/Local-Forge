@@ -46,7 +46,7 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     catalog = default_adapter_catalog()
     manifests = catalog.list_manifests()
 
-    assert len(manifests) == 3
+    assert len(manifests) == 4
     manifest = next(item for item in manifests if item.adapter_id == FAKE_ADAPTER_ID)
     assert isinstance(manifest, AdapterManifest)
     assert manifest.adapter_id == FAKE_ADAPTER_ID
@@ -71,6 +71,10 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
         "GGUF model files must already exist locally" in item
         for item in llama_cpp.known_limitations
     )
+    ollama = next(item for item in manifests if item.adapter_id == "localforge.ollama")
+    assert ollama.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+    assert "server_reported_durations" in ollama.declared_capabilities
+    assert not ollama.declared_capabilities.intersection({"managed_process", "cancellation"})
 
     with pytest.raises(ValidationError, match="adapter_id"):
         AdapterManifest.model_validate(
