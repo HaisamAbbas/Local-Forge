@@ -161,6 +161,12 @@ class OpenAIServingEngineAdapter:
     default_port: int
     tested_versions: tuple[str, ...] = ()
     unsafe_routes: frozenset[str] = frozenset()
+    supported_platforms = [
+        AdapterPlatform.WINDOWS,
+        AdapterPlatform.LINUX,
+        AdapterPlatform.MACOS,
+    ]
+    unsupported_capabilities: frozenset[str] = frozenset()
 
     _extension_keys = {
         "model_id",
@@ -195,7 +201,7 @@ class OpenAIServingEngineAdapter:
             "model_inventory",
             "version_discovery",
             "runtime_fingerprint",
-        }
+        } - set(self.unsupported_capabilities)
         if self.metrics_prefix is not None:
             declared_capabilities.add("native_metrics")
 
@@ -207,11 +213,7 @@ class OpenAIServingEngineAdapter:
             description=self.description,
             category=AdapterCategory.OPENAI_COMPATIBLE,
             integration_modes=[EngineIntegrationMode.ATTACHED_ENDPOINT],
-            operating_systems=[
-                AdapterPlatform.WINDOWS,
-                AdapterPlatform.LINUX,
-                AdapterPlatform.MACOS,
-            ],
+            operating_systems=list(self.supported_platforms),
             version_tested=list(self.tested_versions),
             maintenance_mode=bool(getattr(self, "maintenance_mode", False)),
             recommended_for_new_managed_install=bool(
@@ -996,11 +998,12 @@ class OpenAIServingEngineAdapter:
             if name in self.describe().declared_capabilities
         }
         observed_capabilities["usage_counts"] = usage_probe
-        observed_capabilities["version_discovery"] = capability(
-            version_state,
-            details=version_details,
-            source=f"{self.adapter_id}:{version or 'unknown'}:version_probe",
-        )
+        if "version_discovery" in self.describe().declared_capabilities:
+            observed_capabilities["version_discovery"] = capability(
+                version_state,
+                details=version_details,
+                source=f"{self.adapter_id}:{version or 'unknown'}:version_probe",
+            )
         metrics_state = (
             CapabilitySupport.SUPPORTED
             if metrics.available
@@ -1032,7 +1035,8 @@ class OpenAIServingEngineAdapter:
 
         checks = dict(chat_probe.checks)
         checks["usage_counts"] = usage_probe
-        checks["version_discovery"] = observed_capabilities["version_discovery"]
+        if "version_discovery" in observed_capabilities:
+            checks["version_discovery"] = observed_capabilities["version_discovery"]
         if self.metrics_prefix is not None:
             checks["native_metrics"] = observed_capabilities["native_metrics"]
         checks["runtime_metadata"] = capability(

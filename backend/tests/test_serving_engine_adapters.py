@@ -11,6 +11,7 @@ from localforge.adapters.catalog import (
     default_adapter_catalog,
 )
 from localforge.adapters.contracts import (
+    AdapterCategory,
     AdapterConfiguration,
     GenerationRequest,
     ProbeStatus,
@@ -20,7 +21,13 @@ from localforge.adapters.koboldcpp import KOBOLDCPP_ADAPTER_ID, KoboldCppEngineA
 from localforge.adapters.lightllm import LIGHTLLM_ADAPTER_ID, LightLlmEngineAdapter
 from localforge.adapters.lmdeploy import LMDEPLOY_ADAPTER_ID, LmDeployEngineAdapter
 from localforge.adapters.localai import LOCALAI_ADAPTER_ID, LocalAIEngineAdapter
+from localforge.adapters.mistral_rs import MISTRAL_RS_ADAPTER_ID, MistralRsEngineAdapter
+from localforge.adapters.mlc_llm import MLC_LLM_ADAPTER_ID, MlcLlmEngineAdapter
+from localforge.adapters.mlx_lm import MLX_LM_ADAPTER_ID, MlxLmEngineAdapter
+from localforge.adapters.nvidia_dynamo import NVIDIA_DYNAMO_ADAPTER_ID, NvidiaDynamoEngineAdapter
+from localforge.adapters.onnxruntime_genai import ONNXRUNTIME_GENAI_ADAPTER_ID
 from localforge.adapters.openai_compatible import AdapterOperationUnsupported
+from localforge.adapters.openvino_genai import OPENVINO_GENAI_ADAPTER_ID
 from localforge.adapters.prometheus import parse_engine_prometheus
 from localforge.adapters.sglang import SGLANG_ADAPTER_ID, SglangEngineAdapter
 from localforge.adapters.tensorrt_llm import TENSORRT_LLM_ADAPTER_ID, TensorRtLlmEngineAdapter
@@ -72,6 +79,12 @@ def test_default_catalog_registers_vllm_and_sglang_as_distinct_connectors() -> N
                 LOCALAI_ADAPTER_ID,
                 KOBOLDCPP_ADAPTER_ID,
                 TRITON_TENSORRT_LLM_ADAPTER_ID,
+                MLX_LM_ADAPTER_ID,
+                MLC_LLM_ADAPTER_ID,
+                MISTRAL_RS_ADAPTER_ID,
+                NVIDIA_DYNAMO_ADAPTER_ID,
+                OPENVINO_GENAI_ADAPTER_ID,
+                ONNXRUNTIME_GENAI_ADAPTER_ID,
             } <= identifiers
             triton = next(
                 item
@@ -132,6 +145,16 @@ def test_default_catalog_registers_vllm_and_sglang_as_distinct_connectors() -> N
             "1.122.1",
             "",
         ),
+        (MlxLmEngineAdapter, MLX_LM_ADAPTER_ID, "mlx_lm", "mlx_lm", None, ""),
+        (MlcLlmEngineAdapter, MLC_LLM_ADAPTER_ID, "mlc_llm", "mlc_llm", None, ""),
+        (
+            MistralRsEngineAdapter,
+            MISTRAL_RS_ADAPTER_ID,
+            "mistral_rs",
+            "mistral_rs",
+            None,
+            "# TYPE mistralrs_requests_total counter\nmistralrs_requests_total 4\n",
+        ),
     ],
 )
 def test_additional_connectors_pass_shared_contract_and_report_fixture_coverage(
@@ -157,8 +180,11 @@ def test_additional_connectors_pass_shared_contract_and_report_fixture_coverage(
             assert manifest.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
             assert manifest.operating_systems
             assert manifest.documentation_url
-            assert manifest.version_tested
-            assert any("local API fixture" in value for value in manifest.version_tested)
+            if adapter_id in {MLX_LM_ADAPTER_ID, MLC_LLM_ADAPTER_ID, MISTRAL_RS_ADAPTER_ID}:
+                assert manifest.version_tested == []
+            else:
+                assert manifest.version_tested
+                assert all("local API fixture" in value for value in manifest.version_tested)
             assert ("prometheus_text" in manifest.supported_transports) is bool(
                 manifest.native_metrics
             )
@@ -189,6 +215,25 @@ def test_additional_connectors_pass_shared_contract_and_report_fixture_coverage(
             await server.close()
 
     asyncio.run(run())
+
+
+def test_mlx_lm_catalog_separates_client_and_server_platforms() -> None:
+    manifest = MlxLmEngineAdapter().describe()
+    assert [item.value for item in manifest.operating_systems] == ["windows", "linux", "macos"]
+    assert "Apple silicon Mac" in manifest.description
+    assert "health" not in manifest.declared_capabilities
+    assert "version_discovery" not in manifest.declared_capabilities
+    assert "native_metrics" not in manifest.declared_capabilities
+
+
+def test_mlc_and_mistral_manifests_do_not_claim_unverified_versions() -> None:
+    mlc = MlcLlmEngineAdapter().describe()
+    mistral = MistralRsEngineAdapter().describe()
+    assert mlc.version_tested == []
+    assert "health" not in mlc.declared_capabilities
+    assert "version_discovery" not in mlc.declared_capabilities
+    assert mistral.version_tested == []
+    assert "version_discovery" not in mistral.declared_capabilities
 
 
 def test_localai_fingerprint_keeps_wrapper_and_verified_backend_as_separate_layers() -> None:
@@ -356,6 +401,107 @@ def _config(
         },
         secret_refs=secret_refs or {},
     )
+
+
+DYNAMO_METRICS = "\n".join(
+    [
+        "# TYPE dynamo_frontend_requests_total counter",
+        'dynamo_frontend_requests_total{model="fixture-model"} 29',
+        "# TYPE dynamo_frontend_worker_active_requests gauge",
+        'dynamo_frontend_worker_active_requests{worker_id="worker-a",'
+        'worker_type="decode",request_phase="decode"} 2',
+        'dynamo_frontend_worker_active_requests{worker_id="worker-b",'
+        'worker_type="decode",request_phase="prefill"} 3',
+        "# TYPE dynamo_frontend_router_worker_state gauge",
+        'dynamo_frontend_router_worker_state{router_worker_id="worker-a",'
+        'state="available",target_namespace="dynamo",target_component="vllm"} 1',
+        'dynamo_frontend_router_worker_state{router_worker_id="worker-b",'
+        'state="pending",target_namespace="dynamo",target_component="sglang"} 1',
+    ]
+)
+
+
+def _dynamo_config(endpoint_url: str) -> AdapterConfiguration:
+    return AdapterConfiguration(
+        integration_mode=EngineIntegrationMode.COMPOSED_SERVING_STACK,
+        values={
+            "endpoint_url": endpoint_url,
+            "engine_extensions": {"nvidia_dynamo": {}},
+        },
+    )
+
+
+def test_dynamo_preserves_aggregate_metrics_and_verified_worker_topology() -> None:
+    async def run() -> None:
+        server = ServingEngineServer(engine="dynamo", metrics=DYNAMO_METRICS)
+        await server.start()
+        catalog = AdapterCatalog()
+        manifest = catalog.register(NvidiaDynamoEngineAdapter())
+        config = _dynamo_config(server.endpoint_url)
+        try:
+            assert manifest.category is AdapterCategory.SERVING_STACK
+            assert manifest.integration_modes == [EngineIntegrationMode.COMPOSED_SERVING_STACK]
+            assert "version_discovery" not in manifest.declared_capabilities
+            await assert_registered_adapter_contract(catalog, NVIDIA_DYNAMO_ADAPTER_ID, config)
+
+            fingerprint = await catalog.collect_fingerprint(NVIDIA_DYNAMO_ADAPTER_ID, config)
+            workers = [
+                layer.name for layer in fingerprint.stack_layers if layer.layer_type == "worker"
+            ]
+            assert workers == [
+                "Dynamo worker worker-a (available) [dynamo/vllm]",
+                "Dynamo worker worker-b (pending) [dynamo/sglang]",
+            ]
+            metrics = await catalog.read_metrics(NVIDIA_DYNAMO_ADAPTER_ID, config)
+            aggregate = next(
+                item
+                for item in metrics.metrics
+                if item.metric_name == "dynamo_frontend_requests_total"
+            )
+            worker_samples = [
+                item
+                for item in metrics.metrics
+                if item.metric_name == "dynamo_frontend_worker_active_requests"
+            ]
+            assert aggregate.value == 29
+            assert [item.value for item in worker_samples] == [2, 3]
+            assert [item.labels["worker_id"] for item in worker_samples] == ["worker-a", "worker-b"]
+            assert not any(
+                item.metric_name == "dynamo_frontend_requests_total_worker_sum"
+                for item in metrics.metrics
+            )
+        finally:
+            await catalog.close()
+            await server.close()
+
+    asyncio.run(run())
+
+
+def test_dynamo_does_not_infer_workers_when_worker_inventory_metrics_are_missing() -> None:
+    async def run() -> None:
+        server = ServingEngineServer(
+            engine="dynamo",
+            metrics="\n".join(
+                [
+                    "# TYPE dynamo_frontend_requests_total counter",
+                    "dynamo_frontend_requests_total 0",
+                ]
+            ),
+        )
+        await server.start()
+        catalog = AdapterCatalog()
+        catalog.register(NvidiaDynamoEngineAdapter())
+        try:
+            fingerprint = await catalog.collect_fingerprint(
+                NVIDIA_DYNAMO_ADAPTER_ID, _dynamo_config(server.endpoint_url)
+            )
+            assert [layer.layer_type for layer in fingerprint.stack_layers] == ["orchestrator"]
+            assert fingerprint.settings["frontend_metrics_available"] is True
+        finally:
+            await catalog.close()
+            await server.close()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(

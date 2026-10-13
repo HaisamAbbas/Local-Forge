@@ -242,14 +242,21 @@ class AdapterCatalog:
 def default_adapter_catalog() -> AdapterCatalog:
     """Build the local catalog with fixture and local/attached server adapters."""
 
+    from localforge.adapters.exllamav3 import exllamav3_catalog_manifest
     from localforge.adapters.fake import FakeEngineAdapter
     from localforge.adapters.koboldcpp import KoboldCppEngineAdapter
     from localforge.adapters.lightllm import LightLlmEngineAdapter
     from localforge.adapters.llama_cpp import LlamaCppEngineAdapter
     from localforge.adapters.lmdeploy import LmDeployEngineAdapter
     from localforge.adapters.localai import LocalAIEngineAdapter
+    from localforge.adapters.mistral_rs import MistralRsEngineAdapter
+    from localforge.adapters.mlc_llm import MlcLlmEngineAdapter
+    from localforge.adapters.mlx_lm import MlxLmEngineAdapter
+    from localforge.adapters.nvidia_dynamo import NvidiaDynamoEngineAdapter
     from localforge.adapters.ollama import OllamaEngineAdapter
+    from localforge.adapters.onnxruntime_genai import OnnxRuntimeGenAiEngineAdapter
     from localforge.adapters.openai_compatible import OpenAICompatibleEngineAdapter
+    from localforge.adapters.openvino_genai import OpenVinoGenAiEngineAdapter
     from localforge.adapters.sglang import SglangEngineAdapter
     from localforge.adapters.tensorrt_llm import TensorRtLlmEngineAdapter
     from localforge.adapters.tgi import TgiEngineAdapter
@@ -269,7 +276,14 @@ def default_adapter_catalog() -> AdapterCatalog:
     catalog.register(TgiEngineAdapter())
     catalog.register(LocalAIEngineAdapter())
     catalog.register(KoboldCppEngineAdapter())
+    catalog.register(MlxLmEngineAdapter())
+    catalog.register(MlcLlmEngineAdapter())
+    catalog.register(MistralRsEngineAdapter())
+    catalog.register(OpenVinoGenAiEngineAdapter())
+    catalog.register(OnnxRuntimeGenAiEngineAdapter())
     catalog.register_catalog_entry(triton_tensorrt_llm_catalog_manifest())
+    catalog.register_catalog_entry(exllamav3_catalog_manifest())
+    catalog.register(NvidiaDynamoEngineAdapter())
     return catalog
 
 

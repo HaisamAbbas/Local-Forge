@@ -11,7 +11,13 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
 
     assert response.status_code == 200
     manifests = response.json()
-    assert len(manifests) == 13
+    assert len(manifests) == 20
+    by_id = {item["adapter_id"]: item for item in manifests}
+    assert by_id["localforge.mlx_lm"]["operating_systems"] == ["windows", "linux", "macos"]
+    assert by_id["localforge.openvino_genai"]["category"] == "library_pipeline"
+    assert by_id["localforge.onnxruntime_genai"]["category"] == "library_pipeline"
+    assert by_id["localforge.nvidia_dynamo"]["category"] == "serving_stack"
+    assert by_id["localforge.exllamav3"]["implementation_status"] == "planned"
     fake = next(item for item in manifests if item["adapter_id"] == "localforge.fake")
     assert fake["adapter_version"] == "1.0.0"
     assert fake["category"] == "test_fixture"

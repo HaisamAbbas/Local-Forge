@@ -46,7 +46,7 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     catalog = default_adapter_catalog()
     manifests = catalog.list_manifests()
 
-    assert len(manifests) == 13
+    assert len(manifests) == 20
     manifest = next(item for item in manifests if item.adapter_id == FAKE_ADAPTER_ID)
     assert isinstance(manifest, AdapterManifest)
     assert manifest.adapter_id == FAKE_ADAPTER_ID
@@ -84,6 +84,18 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     assert triton.implementation_status == "planned"
     assert triton.integration_modes == []
     assert triton.version_tested == []
+    exllama = next(item for item in manifests if item.adapter_id == "localforge.exllamav3")
+    assert exllama.implementation_status == "planned"
+    assert exllama.integration_modes == []
+    for adapter_id in (
+        "localforge.mlx_lm",
+        "localforge.mlc_llm",
+        "localforge.mistral_rs",
+        "localforge.openvino_genai",
+        "localforge.onnxruntime_genai",
+    ):
+        entry = next(item for item in manifests if item.adapter_id == adapter_id)
+        assert entry.implementation_status == "implemented"
 
     with pytest.raises(ValidationError, match="adapter_id"):
         AdapterManifest.model_validate(
