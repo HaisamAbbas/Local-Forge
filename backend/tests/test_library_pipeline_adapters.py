@@ -152,6 +152,45 @@ def test_library_adapters_pass_fixture_contract_and_fingerprint_runtime(
     asyncio.run(run())
 
 
+def test_library_pipeline_reads_profile_namespace_and_timeout_settings(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        model_path = tmp_path / "fixture-model"
+        model_path.mkdir()
+        adapter = _FakeOpenVinoAdapter()
+        config = AdapterConfiguration(
+            integration_mode=EngineIntegrationMode.LIBRARY_PIPELINE,
+            values={
+                "engine_extensions": {
+                    "openvino_genai": {
+                        "model_path": str(model_path),
+                        "python_executable": sys.executable,
+                        "startup_timeout_seconds": 45,
+                        "request_timeout_seconds": 90,
+                        "device": "GPU",
+                    }
+                },
+                "request_timeout_seconds": 120,
+            },
+        )
+        try:
+            validation = await adapter.validate_config(config)
+            assert validation.valid
+            path, device, python_executable, startup_timeout, request_timeout = (
+                adapter._configuration(config)
+            )
+            assert path == str(model_path.resolve())
+            assert device == "GPU"
+            assert python_executable == str(Path(sys.executable).resolve())
+            assert startup_timeout == 45
+            assert request_timeout == 120
+        finally:
+            await adapter.close()
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("scenario", ["crash", "malformed", "oversized", "unexpected_field"])
 def test_library_worker_crash_and_invalid_ipc_are_sanitized(
     scenario: str,
@@ -366,18 +405,18 @@ def test_prompt_15c_support_matrix_records_every_target_status() -> None:
     rows = [
         line
         for line in matrix_path.read_text(encoding="utf-8").splitlines()
-        if line.startswith("|")
+        if line.startswith("| `localforge.")
     ]
     expectations = {
-        "MLX-LM": "Implemented",
-        "MLC LLM": "Implemented",
-        "OpenVINO GenAI": "Implemented",
-        "ONNX Runtime GenAI": "Implemented",
-        "mistral.rs": "Implemented",
-        "NVIDIA Dynamo": "Implemented",
-        "ExLlamaV3": "Planned",
+        "localforge.mlx_lm": "implemented",
+        "localforge.mlc_llm": "implemented",
+        "localforge.openvino_genai": "implemented",
+        "localforge.onnxruntime_genai": "implemented",
+        "localforge.mistral_rs": "implemented",
+        "localforge.nvidia_dynamo": "implemented",
+        "localforge.exllamav3": "planned",
     }
-    for connector, status in expectations.items():
-        row = next((line for line in rows if line.startswith(f"| {connector} |")), None)
+    for adapter_id, status in expectations.items():
+        row = next((line for line in rows if line.startswith(f"| `{adapter_id}` |")), None)
         assert row is not None
-        assert status in row
+        assert f"| {status} |" in row

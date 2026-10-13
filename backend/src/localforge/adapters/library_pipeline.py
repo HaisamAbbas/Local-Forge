@@ -102,23 +102,41 @@ class IsolatedLibraryPipelineAdapter:
 
     def describe(self) -> AdapterManifest:
         properties: dict[str, JsonValue] = {
-            "model_path": {"type": "string", "format": "local-path"},
-            "python_executable": {"type": "string", "format": "local-executable-path"},
+            "model_path": {
+                "type": "string",
+                "format": "local-path",
+                "title": "Existing local model path",
+                "description": (
+                    "Choose a model file or a complete model directory already on this machine."
+                ),
+            },
+            "python_executable": {
+                "type": "string",
+                "format": "local-executable-path",
+                "title": "Python executable",
+                "description": "Optional. Leave empty to use LOCALFORGE's Python runtime.",
+            },
             "startup_timeout_seconds": {
                 "type": "number",
                 "minimum": 1,
                 "maximum": 600,
                 "default": 180,
+                "title": "Worker startup timeout (seconds)",
             },
             "request_timeout_seconds": {
                 "type": "number",
                 "minimum": 1,
                 "maximum": 3600,
                 "default": 300,
+                "title": "Request timeout (seconds)",
             },
         }
         if self.configure_device:
-            properties["device"] = {"type": "string", "default": self.default_device}
+            properties["device"] = {
+                "type": "string",
+                "default": self.default_device,
+                "title": "Inference device",
+            }
         return AdapterManifest(
             protocol_version=1,
             adapter_id=self.adapter_id,
@@ -160,8 +178,21 @@ class IsolatedLibraryPipelineAdapter:
     def _platform(self) -> AdapterPlatform | None:
         return _PLATFORM_MAP.get(self._platform_name().casefold())
 
+    def _settings(self, config: AdapterConfiguration) -> dict[str, JsonValue]:
+        """Read this adapter's namespaced profile settings, with direct values taking precedence."""
+
+        values = dict(config.values)
+        namespaces = values.pop("engine_extensions", None)
+        if isinstance(namespaces, dict):
+            adapter_values = namespaces.get(self.backend_name)
+            if isinstance(adapter_values, dict):
+                for name, value in adapter_values.items():
+                    values.setdefault(name, value)
+        return values
+
     def _configuration(self, config: AdapterConfiguration) -> tuple[str, str, str, float, float]:
-        raw_path = config.values.get("model_path")
+        settings = self._settings(config)
+        raw_path = settings.get("model_path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError("Set model_path to an existing local model file or directory.")
         path = Path(raw_path).expanduser()
@@ -175,7 +206,7 @@ class IsolatedLibraryPipelineAdapter:
             raise ValueError("model_path must point to a model file or directory.")
         if len(str(resolved)) > 4096:
             raise ValueError("model_path exceeds the supported path length.")
-        raw_python = config.values.get("python_executable", sys.executable)
+        raw_python = settings.get("python_executable", sys.executable)
         if not isinstance(raw_python, str) or not raw_python.strip():
             raise ValueError(
                 "python_executable must be an absolute path to an existing Python file."
@@ -189,18 +220,18 @@ class IsolatedLibraryPipelineAdapter:
             raise ValueError("python_executable does not exist or cannot be accessed.") from error
         if not resolved_python.is_file():
             raise ValueError("python_executable must point to an existing file.")
-        if not self.configure_device and "device" in config.values:
+        if not self.configure_device and "device" in settings:
             raise ValueError(
                 "This runtime selects its execution provider from the local model configuration."
             )
-        device_value = config.values.get("device", self.default_device)
+        device_value = settings.get("device", self.default_device)
         if not isinstance(device_value, str) or not device_value.strip() or len(device_value) > 120:
             raise ValueError("device must be a non-empty value no longer than 120 characters.")
         startup_timeout = _bounded_number(
-            config.values.get("startup_timeout_seconds", 180), minimum=1, maximum=600
+            settings.get("startup_timeout_seconds", 180), minimum=1, maximum=600
         )
         request_timeout = _bounded_number(
-            config.values.get("request_timeout_seconds", 300), minimum=1, maximum=3600
+            settings.get("request_timeout_seconds", 300), minimum=1, maximum=3600
         )
         return (
             str(resolved),
@@ -236,7 +267,7 @@ class IsolatedLibraryPipelineAdapter:
             diagnostics.append(
                 _diagnostic("model_configuration_invalid", str(error), DiagnosticSeverity.ERROR)
             )
-        if not isinstance(config.values.get("device", self.default_device), str):
+        if not isinstance(self._settings(config).get("device", self.default_device), str):
             diagnostics.append(
                 _diagnostic("device_invalid", "device must be a string.", DiagnosticSeverity.ERROR)
             )
@@ -244,7 +275,7 @@ class IsolatedLibraryPipelineAdapter:
             ("startup_timeout_seconds", 180, 1, 600),
             ("request_timeout_seconds", 300, 1, 3600),
         ):
-            value = config.values.get(name, default)
+            value = self._settings(config).get(name, default)
             if _bounded_number_or_none(value, minimum=minimum, maximum=maximum) is None:
                 diagnostics.append(
                     _diagnostic(
