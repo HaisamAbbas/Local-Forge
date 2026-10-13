@@ -113,6 +113,8 @@ Follow the prompt pack in one conversation and the same workspace. Prompt 0 is c
 
 Prompts 15A–15C expand the ecosystem after the MVP adapters and are performed in that order. Before each real connector, check its current official documentation and record the tested version. A catalog entry alone is not a claim of working support.
 
+Prompts 0–13 are complete. Prompt 14 is next.
+
 ## First usable vertical slice
 
 Build and verify a deterministic fake-engine workflow before requiring any real inference engine:
@@ -470,5 +472,43 @@ Frontend, from `frontend/`:
 - `npm run test` - passed (26 tests).
 - `npm run build` - passed.
 - `npm run e2e` - passed (4 Chromium tests).
+
+Repository diff check: `git diff --check` - passed.
+
+## Prompt 13 completion record
+
+### Delivered
+
+- Added the attach-only `localforge.ollama` adapter for an existing Ollama service on loopback. It probes health with `HEAD /`, discovers server version from `/api/version`, and reads inventory from `/api/tags`; an unavailable inventory does not erase a successful health result.
+- Added streaming NDJSON and non-streaming `/api/chat`, stable error/timeout/termination events, exact token usage when supplied, safe option mapping including `max_tokens` to `num_predict`, and raw per-request server timing observations in nanoseconds.
+- Kept Ollama server version separate from the underlying runner. Runner metadata is stored as unknown unless verified. Remote-backed inventory entries are omitted, and request preparation checks that the selected model appears in the local inventory.
+- Added an Ollama profile form and Workloads guidance that requires an existing local model and states that LOCALFORGE never pulls, deletes, starts, or stops Ollama. The adapter has no managed-process or server-side cancellation capability.
+- Added fixture tests for the shared adapter contract, streaming and non-streaming responses, token/timing normalization, missing models, unavailable inventory, unknown version, timeouts, incomplete streams, safe errors, model provenance, and request metric persistence. Added an opt-in live smoke test requiring a preinstalled local model.
+- Reviewed the official Ollama [API introduction](https://docs.ollama.com/api/introduction), [chat](https://docs.ollama.com/api/chat), [tags](https://docs.ollama.com/api/tags), [usage](https://docs.ollama.com/api/usage), [version](https://docs.ollama.com/api/version), and [Go client health check](https://github.com/ollama/ollama/blob/main/api/client.go) documentation on 2026-10-13.
+
+### Scope and limitations
+
+- The adapter only attaches to local Ollama. It does not manage the service or invoke model pull/delete APIs.
+- Ollama's documented response includes per-request timing fields, not an aggregate metrics endpoint for this adapter. Those timings remain raw engine-native measurements, separate from client-observed request latency.
+- The live smoke test was not run because no Ollama endpoint and preinstalled model were explicitly configured. It is skipped by default.
+- E2E now starts an isolated API database and uses dedicated ports 18114/15174, so it cannot reuse or mutate an already-running development server.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run --locked ruff format --check src tests` - passed (61 files).
+- `uv run --locked ruff check src tests` - passed.
+- `uv run --locked mypy src` - passed (35 source files).
+- `uv run --locked pytest -q` - passed (154 tests; 3 opt-in integration tests skipped).
+
+Frontend, from `frontend/`:
+
+- `npm run format:check` - passed.
+- `npm run lint` - passed.
+- `npm run typecheck` - passed.
+- `npm run test` - passed (29 tests).
+- `npm run build` - passed.
+- `npm run e2e` - passed (4 Chromium E2E tests on isolated API/UI ports).
 
 Repository diff check: `git diff --check` - passed.

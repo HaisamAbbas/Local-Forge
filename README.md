@@ -6,11 +6,11 @@ Requests go from that machine to the selected inference engine. Remote endpoint 
 explicit confirmation through the local API; remote inference requests use the configured endpoint.
 
 The local UI, API, SQLite persistence, machine and engine profiles, workload builder, benchmark
-runner, and run history are implemented. The adapter catalog includes a deterministic fake engine
-for checking the workflow and a generic attached OpenAI-compatible chat-completions adapter. The
-fake engine does not load a model and its timings are not model-performance measurements. Real
-endpoint requests are sent by the evaluator machine's local API to the configured endpoint. Ordinary
-checks do not download models or contact public endpoints.
+runner, and run history are implemented. The adapter catalog includes a deterministic fake engine,
+a generic attached OpenAI-compatible chat-completions adapter, an attached llama.cpp adapter, and
+an attach-only Ollama adapter. The fake engine does not load a model and its timings are not
+model-performance measurements. Real endpoint requests are sent by the evaluator machine's local
+API to the configured endpoint. Ordinary checks do not download models or contact public endpoints.
 
 ## Requirements
 
@@ -109,6 +109,22 @@ with an existing GGUF file and working directory. LocalForge never downloads mod
 Managed launch stays on 127.0.0.1, and GPU support depends on the backend compiled into the chosen
 binary. See [the llama.cpp adapter guide](docs/llama-cpp.md) for supported probes and metrics, the
 version-pinned upstream references, and an opt-in live smoke test.
+
+### Connect local Ollama
+
+Ollama must already be running on this machine, with the model already installed. In **Engines**,
+choose **Ollama**, keep **Attached endpoint**, and use the local server URL (default
+`http://127.0.0.1:11434`). Probe the server, then select one of the locally listed models in
+**Workloads**. LOCALFORGE checks `/`, `/api/version`, and `/api/tags`; chat requests use
+`/api/chat`. The adapter filters remote-backed entries from inventory and refuses to run a model it
+cannot verify as local. It never calls Ollama's pull or delete operations, and it never starts or
+stops an Ollama process.
+
+The stored runtime version identifies the Ollama server. The underlying runner remains explicitly
+unknown unless the server exposes verified runner details; model family or file format is not used
+to infer it. Ollama's per-request duration fields are saved as raw engine-native nanosecond
+observations. Aggregate Ollama metric scraping is unavailable. See the [Ollama adapter guide](docs/ollama.md)
+for supported behavior and an opt-in smoke test.
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:
