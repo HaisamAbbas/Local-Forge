@@ -65,6 +65,8 @@ sequence-cursor replay or Server-Sent Events at `/api/v1/runs/{run_id}/events/st
 samples retain prompt and output text only when the saved plan explicitly enables retention.
 Metric formulas, provenance, percentile minimums, and quality flags are documented in
 [`docs/metrics.md`](docs/metrics.md).
+Local API protection, data retention, path handling, process ownership, and recovery limits are
+documented in [`docs/security-and-recovery.md`](docs/security-and-recovery.md).
 
 ### Connect an OpenAI-compatible endpoint
 

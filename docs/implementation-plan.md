@@ -755,3 +755,58 @@ Frontend, from `frontend/`:
 - `npm run e2e` - passed (6 Chromium tests using isolated local API and UI ports).
 
 - `git diff --check` - passed.
+
+## Prompt 17 completion record
+
+### Delivered
+
+- Closed a dataset-storage escape where pre-existing symbolic links or Windows junctions could
+  redirect upload staging or retained snapshots outside the configured data directory. Dataset
+  snapshots and report directories/files now reject linked targets; report downloads accept only
+  the exact report path derived from persisted report identity and format.
+- Reject database, WAL, SHM, and journal links before SQLite opens them. On POSIX, create the SQLite
+  file as user-only and restrict existing database sidecars to owner access. Database startup now
+  closes a connection if a safety pragma fails.
+- Compare local-session token bytes safely, including malformed non-ASCII values. Tests cover every
+  API mutation family, loopback host enforcement, foreign origins, and the absence of permissive
+  cross-origin response headers.
+- Carry one request ID from generation through adapter preparation, adapter stream events, stored
+  samples, run events, and abort requests. The catalog rejects adapters that change request identity
+  so a connector cannot silently disable request cancellation.
+- Added regression tests for redirected dataset/report paths, database lock timeout and subsequent
+  recovery, corrupt-database preservation, bounded stream-queue cleanup, and cancellation-drain
+  timeout. Existing worker-death, interruption recovery, stale-lock, retention, credential
+  redaction, remote-disclosure, and owned-process tests remain in the full suite.
+- Added [`docs/security-and-recovery.md`](security-and-recovery.md) for local API boundaries,
+  retention and credential handling, storage paths, database recovery, child-process ownership,
+  cancellation bounds, and known limitations.
+
+### Scope and limitations
+
+- LOCALFORGE is a single-user app and does not isolate hostile programs running under the same OS
+  account. Keep the API bound to loopback; CORS is not enabled and every mutation requires the
+  process-local token.
+- A hard API crash discards in-memory process handles. Restart recovery marks runs interrupted and
+  workers stop after observing that state, but LOCALFORGE will not kill a process by PID alone. A
+  managed engine process can survive a hard crash and may need manual shutdown. Some attached
+  engines also continue server-side generation if their API does not support cancellation.
+- Corrupt databases fail closed and remain unchanged; automatic backup and repair are not
+  implemented. Close LOCALFORGE and copy the complete data directory before manual recovery.
+- POSIX database mode checks were skipped on this Windows host. Three file-symlink tests also
+  skipped because creating file symlinks requires a privilege this host does not have; Windows
+  directory-junction rejection tests ran. The repository has no configured dependency-vulnerability
+  scanner, so no network-dependent audit was added.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run ruff format --check src tests` - passed (90 files).
+- `uv run ruff check src tests` - passed.
+- `uv run mypy src/localforge` - passed (57 source files).
+- `uv run pytest -q` - passed (257 passed, 9 skipped: five opt-in live-engine tests, three
+  unavailable file-symlink tests, and one POSIX-only permissions test).
+- `uv lock --check --offline` - passed; 43 packages resolved from the lockfile.
+- `git diff --check` - passed.
+
+No frontend files were changed for this prompt.
