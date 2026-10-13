@@ -12,6 +12,7 @@ from localforge.adapters.catalog import AdapterNotFoundError
 from localforge.adapters.contracts import (
     AdapterConfiguration,
     AdapterProcessHandle,
+    DiagnosticSeverity,
     ProbeResult,
     ProbeStatus,
 )
@@ -597,10 +598,16 @@ async def probe_engine_profile(
     config = _profile_adapter_configuration(profile)
     validation = await catalog.validate_config(profile.adapter_id, config)
     if not validation.valid:
+        diagnostic = next(
+            (item for item in validation.diagnostics if item.severity is DiagnosticSeverity.ERROR),
+            None,
+        )
         raise _http_error(
             422,
-            "adapter_config_invalid",
-            "The selected adapter rejected this profile configuration.",
+            diagnostic.code if diagnostic is not None else "adapter_config_invalid",
+            diagnostic.message
+            if diagnostic is not None
+            else "The selected adapter rejected this profile configuration.",
         )
     try:
         result = await catalog.probe(profile.adapter_id, config)

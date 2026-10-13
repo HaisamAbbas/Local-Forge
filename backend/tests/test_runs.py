@@ -347,6 +347,31 @@ def test_composed_stack_profiles_lock_the_shared_machine(connection) -> None:
     assert len(shared) == 1 and next(iter(shared))[0] == "accelerator"
 
 
+def test_remote_composed_stack_does_not_lock_the_local_accelerator(connection) -> None:
+    machine = MachineProfile(
+        label="Local client host",
+        host_name="local-client-host",
+        hardware=HardwareSnapshot(accelerators=[AcceleratorInfo(name="Local GPU")]),
+    )
+    RecordRepository(connection, MachineProfile).create(machine)
+    engine = EngineProfile(
+        label="Remote Dynamo stack",
+        adapter_id="localforge.nvidia_dynamo",
+        integration_mode=EngineIntegrationMode.COMPOSED_SERVING_STACK,
+        endpoint_url="https://dynamo.example/v1",
+        machine_profile_id=machine.id,
+    )
+    plan = BenchmarkPlan(
+        name="Remote stack plan",
+        engine_profile_id=engine.id,
+        workload_id=uuid4(),
+        machine_profile_id=machine.id,
+    )
+
+    resources = _resource_keys(connection, plan, engine)
+    assert resources == [("serving_stack", str(engine.id))]
+
+
 def test_startup_marks_nonterminal_runs_interrupted(connection) -> None:
     run = _new_queued_run(connection, locks=[("endpoint", "engine-1")])
 

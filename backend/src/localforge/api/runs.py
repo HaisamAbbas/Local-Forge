@@ -108,8 +108,11 @@ def _resource_keys(
         machine_id = plan.machine_profile_id or engine.machine_profile_id
         return endpoint_resources + _machine_resource_keys(connection, machine_id)
     if engine.integration_mode is EngineIntegrationMode.COMPOSED_SERVING_STACK:
+        stack_resources = [("serving_stack", str(engine.id))]
+        if endpoint_is_remote(engine.endpoint_url):
+            return stack_resources
         machine_id = plan.machine_profile_id or engine.machine_profile_id
-        return [("serving_stack", str(engine.id))] + _machine_resource_keys(connection, machine_id)
+        return stack_resources + _machine_resource_keys(connection, machine_id)
 
     machine_id = plan.machine_profile_id or engine.machine_profile_id
     return _machine_resource_keys(connection, machine_id)
