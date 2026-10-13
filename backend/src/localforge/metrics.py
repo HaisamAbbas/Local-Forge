@@ -996,9 +996,10 @@ def evaluate_native_metric_snapshots(
             missing_stage = (
                 "both" if first is None and last is None else "before" if first is None else "after"
             )
-            warnings.append(
-                ("native_metric_missing", f"{name} was missing from the {missing_stage} snapshot.")
+            missing_from = (
+                "both snapshots" if missing_stage == "both" else f"the {missing_stage} snapshot"
             )
+            warnings.append(("native_metric_missing", f"{name} was missing from {missing_from}."))
             observed = last or first
             rows.append(
                 _metric(
