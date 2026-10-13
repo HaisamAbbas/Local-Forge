@@ -22,6 +22,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
 from localforge.adapters.contracts import AdapterManifest, AdapterProcessHandle
+from localforge.api.experiments import router as experiment_router
 from localforge.api.profiles import router as profile_router
 from localforge.api.runs import (
     monitor_run_workers,
@@ -351,6 +352,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     application.include_router(profile_router)
     application.include_router(workload_router)
     application.include_router(run_router)
+    application.include_router(experiment_router)
     application.add_middleware(
         DatasetUploadBodyLimitMiddleware,
         max_upload_bytes=app_settings.max_dataset_upload_bytes,

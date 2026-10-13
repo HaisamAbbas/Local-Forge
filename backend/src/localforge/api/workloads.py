@@ -5,19 +5,23 @@ import math
 import os
 import sqlite3
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, cast
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import ValidationError
 
+from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, AdapterNotFoundError
 from localforge.api.dependencies import DatabaseConnection, LocalAdapterCatalog
 from localforge.api.schemas import (
     BenchmarkPlanCreate,
+    BenchmarkPlanExport,
     BenchmarkPlanResponse,
+    BenchmarkPlanSettings,
     BenchmarkPreflight,
     DatasetImportResponse,
     DatasetPreview,
@@ -55,6 +59,7 @@ from localforge.core.models import (
 from localforge.core.urls import endpoint_is_remote
 from localforge.dataset_import import DatasetImportError, parse_dataset
 from localforge.dataset_storage import verify_dataset_snapshot, write_snapshot
+from localforge.storage.database import transaction
 from localforge.storage.repositories import RecordRepository
 
 router = APIRouter(prefix="/api/v1")
@@ -913,6 +918,138 @@ def create_benchmark_plan(
 @router.get("/benchmark-plans", response_model=list[BenchmarkPlan], tags=["benchmark-plans"])
 def list_benchmark_plans(connection: DatabaseConnection) -> list[BenchmarkPlan]:
     return RecordRepository(connection, BenchmarkPlan).list(limit=1000)
+
+
+@router.get("/benchmark-plans/{plan_id}/export", tags=["benchmark-plans"])
+def export_benchmark_plan(
+    plan_id: UUID,
+    request: Request,
+    connection: DatabaseConnection,
+) -> Response:
+    plan = RecordRepository(connection, BenchmarkPlan).get(plan_id)
+    if plan is None:
+        raise _http_error(404, "benchmark_plan_not_found", "The benchmark plan was not found.")
+    workload_snapshot = plan.configuration_snapshot.get("workload")
+    exported_workload: Workload | None = None
+    if isinstance(workload_snapshot, dict):
+        exported_workload = Workload.model_validate(workload_snapshot)
+    else:
+        exported_workload = RecordRepository(connection, Workload).get(plan.workload_id)
+    if exported_workload is None:
+        raise _http_error(
+            409, "benchmark_workload_missing", "The plan workload snapshot is unavailable."
+        )
+    bundle = BenchmarkPlanExport(
+        app_version=__version__,
+        database_schema_version=cast(int, request.app.state.database_schema_version),
+        exported_at=datetime.now(UTC),
+        workload=exported_workload,
+        plan=BenchmarkPlanSettings(
+            name=plan.name,
+            engine_profile_id=plan.engine_profile_id,
+            machine_profile_id=plan.machine_profile_id,
+            model_artifact_id=plan.model_artifact_id,
+            warmup_requests=plan.warmup_requests,
+            measured_requests=plan.measured_requests,
+            measurement_duration_seconds=plan.measurement_duration_seconds,
+            concurrency=plan.concurrency,
+            timeout_seconds=plan.timeout_seconds,
+            retain_prompt_output=plan.retain_prompt_output,
+            dataset_snapshot_hash=plan.dataset_snapshot_hash,
+        ),
+    )
+    content = json.dumps(bundle.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="localforge-plan-{plan.id}.json"'},
+    )
+
+
+@router.post(
+    "/benchmark-plans/import",
+    response_model=BenchmarkPlanResponse,
+    status_code=201,
+    tags=["benchmark-plans"],
+)
+def import_benchmark_plan(
+    bundle: BenchmarkPlanExport,
+    request: Request,
+    connection: DatabaseConnection,
+    catalog: LocalAdapterCatalog,
+) -> BenchmarkPlanResponse:
+    plan_settings = bundle.plan
+    if plan_settings.dataset_snapshot_hash is not None:
+        dataset_id = bundle.workload.dataset_id
+        dataset = RecordRepository(connection, Dataset).get(dataset_id) if dataset_id else None
+        if dataset is None or dataset.snapshot_hash != plan_settings.dataset_snapshot_hash:
+            raise _http_error(
+                409,
+                "plan_dataset_unavailable",
+                "Import requires the same retained dataset snapshot to exist in this "
+                "LOCALFORGE workspace.",
+            )
+    workload = Workload.model_validate(
+        bundle.workload.model_dump(mode="python")
+        | {
+            "id": uuid4(),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+            "status": WorkloadStatus.READY,
+        }
+    )
+    create_body = BenchmarkPlanCreate(
+        name=plan_settings.name,
+        engine_profile_id=plan_settings.engine_profile_id,
+        machine_profile_id=plan_settings.machine_profile_id,
+        model_artifact_id=plan_settings.model_artifact_id,
+        workload_id=workload.id,
+        retain_prompt_output=plan_settings.retain_prompt_output,
+    )
+    connection.execute("SAVEPOINT localforge_plan_import_preflight")
+    try:
+        RecordRepository(connection, Workload).create(workload)
+        preflight = _preflight(
+            create_body,
+            connection=connection,
+            data_directory=cast(Path, request.app.state.data_directory),
+            catalog=catalog,
+            expected_snapshot_hash=plan_settings.dataset_snapshot_hash,
+        )
+    finally:
+        connection.execute("ROLLBACK TO localforge_plan_import_preflight")
+        connection.execute("RELEASE localforge_plan_import_preflight")
+    dataset = (
+        RecordRepository(connection, Dataset).get(workload.dataset_id)
+        if workload.dataset_id is not None
+        else None
+    )
+    configuration_snapshot: dict[str, object] = {
+        "workload": workload.model_dump(mode="json"),
+        "dataset_snapshot_hash": dataset.snapshot_hash if dataset is not None else None,
+        "dataset_source_hash": dataset.content_hash if dataset is not None else None,
+        "prompt_output_retention": plan_settings.retain_prompt_output,
+    }
+    imported_plan = BenchmarkPlan(
+        name=plan_settings.name,
+        status=BenchmarkPlanStatus.READY if preflight.valid else BenchmarkPlanStatus.BLOCKED,
+        machine_profile_id=plan_settings.machine_profile_id,
+        engine_profile_id=plan_settings.engine_profile_id,
+        model_artifact_id=plan_settings.model_artifact_id,
+        workload_id=workload.id,
+        warmup_requests=plan_settings.warmup_requests,
+        measured_requests=plan_settings.measured_requests,
+        measurement_duration_seconds=plan_settings.measurement_duration_seconds,
+        concurrency=plan_settings.concurrency,
+        timeout_seconds=plan_settings.timeout_seconds,
+        retain_prompt_output=plan_settings.retain_prompt_output,
+        dataset_snapshot_hash=dataset.snapshot_hash if dataset is not None else None,
+        configuration_snapshot=cast(dict[str, JsonValue], configuration_snapshot),
+    )
+    with transaction(connection):
+        RecordRepository(connection, Workload).create(workload)
+        RecordRepository(connection, BenchmarkPlan).create(imported_plan)
+    return BenchmarkPlanResponse(plan=imported_plan, preflight=preflight)
 
 
 @router.post(
