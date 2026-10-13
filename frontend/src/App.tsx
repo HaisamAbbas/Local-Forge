@@ -71,49 +71,46 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar" aria-label="Workspace sidebar">
-        <a className="brand" href="#overview" aria-label="LOCALFORGE Inference Lab home">
-          <span className="brand-mark" aria-hidden="true">
-            LF
-          </span>
-          <span className="brand-name">
-            LOCAL<span>FORGE</span>
-            <small>Inference Lab</small>
-          </span>
-        </a>
-
-        <nav className="primary-navigation" aria-label="Primary navigation">
-          {navigation.map((item) => (
-            <a
-              aria-current={activeScreen === item.id ? "page" : undefined}
-              className="navigation-link"
-              href={`#${item.id}`}
-              key={item.id}
-            >
-              <span className="navigation-indicator" aria-hidden="true" />
-              {item.label}
-            </a>
-          ))}
-        </nav>
-
-        <div className="sidebar-note">
-          <span className="local-dot" aria-hidden="true" />
-          Local workspace
-          <small>Runs on this machine by default</small>
+      <header className="topbar">
+        <div className="topbar-copy">
+          <p className="eyebrow">LOCAL WORKSPACE</p>
+          <p className="topbar-caption">Inference benchmarking and experimentation</p>
         </div>
-      </aside>
-
+      </header>
       <div className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">LOCAL WORKSPACE</p>
-            <p className="topbar-caption">Inference benchmarking and experimentation</p>
+        <header className="site-navigation">
+          <a className="brand" href="#overview" aria-label="LOCALFORGE Inference Lab home">
+            <span className="brand-mark" aria-hidden="true">
+              LF
+            </span>
+            <span className="brand-name">
+              LOCAL<span>FORGE</span>
+              <small>Inference Lab</small>
+            </span>
+          </a>
+
+          <nav className="primary-navigation" aria-label="Primary navigation">
+            {navigation.map((item, index) => (
+              <a
+                aria-current={activeScreen === item.id ? "page" : undefined}
+                className="navigation-link"
+                href={`#${item.id}`}
+                key={item.id}
+              >
+                <span className="navigation-label">{item.label}</span>
+                <span className="navigation-index" aria-hidden="true">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+              </a>
+            ))}
+          </nav>
+          <div className="site-nav-status">
+            <ApiStatus />
           </div>
-          <ApiStatus />
         </header>
 
-        <main className="main-content">
-          <div className="page-heading">
+        <main className={`main-content main-content--${activeScreen}`}>
+          <div className={`page-heading page-heading--${activeScreen}`}>
             <div>
               <p className="eyebrow">WORKSPACE / {currentScreen.label.toUpperCase()}</p>
               <h1>{currentScreen.label}</h1>

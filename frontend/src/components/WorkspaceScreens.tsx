@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { IconApi, IconServer, IconTerminal2 } from "@tabler/icons-react";
 
 import {
   ApiError,
@@ -158,9 +159,13 @@ function ResourcePanel<T>({
 }) {
   if (resource.status === "loading") {
     return (
-      <p className="state-message" role="status" aria-busy="true">
-        {loadingLabel}
-      </p>
+      <div className="resource-skeleton">
+        <span className="visually-hidden" role="status" aria-busy="true">
+          {loadingLabel}
+        </span>
+        <span aria-hidden="true" />
+        <span aria-hidden="true" />
+      </div>
     );
   }
   if (resource.status === "error") {
@@ -300,15 +305,48 @@ export function OverviewScreen() {
   return (
     <div className="screen-stack">
       <section className="welcome-panel overview-intro" aria-labelledby="welcome-title">
-        <div className="panel-accent" aria-hidden="true" />
-        <div className="welcome-copy">
-          <p className="eyebrow">LOCAL INFERENCE WORKSPACE</p>
-          <h2 id="welcome-title">Understand what your machine and engine can do.</h2>
-          <p>
-            Connect an inference engine, choose a workload, and inspect measured results. Unknown
-            hardware and engine capabilities stay labeled as unknown.
-          </p>
+        <div className="welcome-heading">
+          <div className="welcome-copy">
+            <p className="eyebrow">LOCAL INFERENCE WORKSPACE</p>
+            <h2 id="welcome-title">Benchmark the model running on your machine.</h2>
+            <p>
+              Connect an inference engine, choose a workload, and inspect measured results. Hardware
+              and engine capabilities remain clearly labeled when unknown.
+            </p>
+          </div>
+          <a className="button button--primary overview-action" href="#engines">
+            Add an engine
+          </a>
         </div>
+        <ol className="overview-workflow" aria-label="Benchmark workflow">
+          <li className="overview-workflow__step overview-workflow__step--current">
+            <span className="overview-workflow__number" aria-hidden="true">
+              01
+            </span>
+            <div>
+              <a href="#engines">Connect an engine</a>
+              <p>Choose the inference endpoint to evaluate.</p>
+            </div>
+          </li>
+          <li className="overview-workflow__step">
+            <span className="overview-workflow__number" aria-hidden="true">
+              02
+            </span>
+            <div>
+              <a href="#workloads">Prepare a workload</a>
+              <p>Set up a repeatable request pattern.</p>
+            </div>
+          </li>
+          <li className="overview-workflow__step">
+            <span className="overview-workflow__number" aria-hidden="true">
+              03
+            </span>
+            <div>
+              <a href="#runs">Review measured results</a>
+              <p>Compare latency and run outcomes.</p>
+            </div>
+          </li>
+        </ol>
         <div className="overview-summary-grid">
           <section className="summary-card" aria-labelledby="machine-summary-title">
             <div className="section-title-row">
@@ -368,7 +406,7 @@ export function OverviewScreen() {
               {(value) =>
                 value.length === 0 ? (
                   <>
-                    <p className="summary-primary">No benchmark runs yet</p>
+                    <p className="summary-primary">No runs recorded</p>
                     <p className="summary-secondary">
                       Measured results will appear here after a run.
                     </p>
@@ -405,14 +443,11 @@ export function OverviewScreen() {
       )}
       {runs.resource.status === "ready" && runs.resource.value.length === 0 && (
         <section className="empty-state panel" aria-labelledby="empty-runs-title">
-          <span className="empty-state-icon" aria-hidden="true">
-            01
-          </span>
           <div>
-            <h2 id="empty-runs-title">No benchmark results to show</h2>
+            <h2 id="empty-runs-title">No benchmark runs yet</h2>
             <p>
-              This workspace has no saved runs. Add and probe an engine before configuring a
-              benchmark.
+              Connect and probe an engine, then configure a workload to create your first measured
+              run.
             </p>
           </div>
           <a className="button button--primary" href="#engines">
@@ -1350,314 +1385,349 @@ export function EnginesScreen() {
   const availableManifests = catalog.resource.status === "ready" ? catalog.resource.value : [];
   return (
     <div className="screen-stack">
-      <section className="panel" aria-labelledby="engine-catalog-title">
-        <div className="section-title-row">
-          <div>
-            <p className="eyebrow">INSTALLED ADAPTERS</p>
-            <h2 id="engine-catalog-title">Engine catalog</h2>
+      <div className="engine-workbench">
+        <section className="panel engine-catalog-panel" aria-labelledby="engine-catalog-title">
+          <div className="section-title-row">
+            <div>
+              <p className="eyebrow">INSTALLED ADAPTERS</p>
+              <h2 id="engine-catalog-title">Engine catalog</h2>
+            </div>
+            <button
+              className="button button--primary"
+              disabled={!availableManifests.length}
+              onClick={() => {
+                setDialogError("");
+                setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
+                setEditing("new");
+              }}
+              type="button"
+            >
+              Add engine
+            </button>
           </div>
-          <button
-            className="button button--primary"
-            disabled={!availableManifests.length}
-            onClick={() => {
-              setDialogError("");
-              setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
-              setEditing("new");
-            }}
-            type="button"
-          >
-            Add engine
-          </button>
-        </div>
-        <p className="helper-copy">
-          Only adapters registered with this local service are shown. Connection modes and known
-          limitations come from each adapter manifest.
-        </p>
-        <ResourcePanel
-          resource={catalog.resource}
-          onRetry={() => void catalog.reload()}
-          loadingLabel="Loading installed adapters…"
-        >
-          {(items) =>
-            items.length === 0 ? (
-              <p className="empty-inline">No adapters are registered in this installation.</p>
-            ) : (
-              <div className="catalog-grid">
-                {items.map((manifest) => (
-                  <article className="catalog-card" key={manifest.adapter_id}>
-                    <div className="catalog-card-header">
-                      <span className="status-pill status-pill--enabled">Installed</span>
-                      <span className="catalog-category">{titleCase(manifest.category)}</span>
-                    </div>
-                    <h3>{manifest.display_name}</h3>
-                    <p>{manifest.description}</p>
-                    <div className="catalog-meta">
-                      <span>Modes</span>
-                      <strong>{manifest.integration_modes.map(titleCase).join(" · ")}</strong>
-                    </div>
-                    <div className="catalog-meta">
-                      <span>Capabilities declared</span>
-                      <strong>
-                        {manifest.declared_capabilities.length
-                          ? manifest.declared_capabilities.map(titleCase).join(", ")
-                          : "Unknown"}
-                      </strong>
-                    </div>
-                    {manifest.known_limitations.length > 0 && (
-                      <details>
-                        <summary>Known limitations</summary>
-                        <ul>
-                          {manifest.known_limitations.map((limitation) => (
-                            <li key={limitation}>{limitation}</li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-                    <button
-                      className="button button--quiet"
-                      onClick={() => {
-                        setDialogError("");
-                        setSelectedAdapterId(manifest.adapter_id);
-                        setEditing("new");
-                      }}
-                      type="button"
-                    >
-                      Add this adapter
-                    </button>
-                  </article>
-                ))}
-              </div>
-            )
-          }
-        </ResourcePanel>
-      </section>
-      <section className="panel" aria-labelledby="engine-profiles-title">
-        <div className="section-title-row">
-          <div>
-            <p className="eyebrow">LOCAL CONNECTIONS</p>
-            <h2 id="engine-profiles-title">Engine profiles</h2>
-          </div>
-          <button
-            className="button button--quiet"
-            onClick={() => void profiles.reload()}
-            type="button"
-          >
-            Refresh
-          </button>
-        </div>
-        {actionError && (
-          <p className="form-error" role="alert">
-            {actionError}
+          <p className="helper-copy">
+            Only adapters registered with this local service are shown. Connection modes and known
+            limitations come from each adapter manifest.
           </p>
-        )}
-        <ResourcePanel
-          resource={profiles.resource}
-          onRetry={() => void profiles.reload()}
-          loadingLabel="Loading engine profiles…"
-        >
-          {(items) =>
-            items.length === 0 ? (
-              <div className="empty-inline empty-inline--action">
-                <p>No engine profiles are configured.</p>
-                <button
-                  className="button button--primary"
-                  disabled={!availableManifests.length}
-                  onClick={() => {
-                    setDialogError("");
-                    setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
-                    setEditing("new");
-                  }}
-                  type="button"
-                >
-                  Add your first engine
-                </button>
-              </div>
-            ) : (
-              <div className="engine-profile-list">
-                {items.map((profile) => {
-                  const manifest = manifestById.get(profile.adapter_id);
-                  const probeResult = probeResults[profile.id];
-                  const savedCapabilities = profile.capabilities;
-                  const modelsState = modelData[profile.id];
-                  return (
-                    <article className="engine-profile-card" key={profile.id}>
-                      <div className="engine-profile-header">
-                        <div>
-                          <div className="profile-name-row">
-                            <h3>{profile.label}</h3>
-                            <span className={`status-pill status-pill--${profile.status}`}>
-                              {statusLabel(profile.status)}
-                            </span>
+          <ResourcePanel
+            resource={catalog.resource}
+            onRetry={() => void catalog.reload()}
+            loadingLabel="Loading installed adapters…"
+          >
+            {(items) =>
+              items.length === 0 ? (
+                <p className="empty-inline">No adapters are registered in this installation.</p>
+              ) : (
+                <div className="catalog-grid">
+                  {items.map((manifest) => (
+                    <article
+                      className={`catalog-card ${
+                        manifest.category === "test_fixture"
+                          ? "catalog-card--fixture"
+                          : "catalog-card--endpoint"
+                      }`}
+                      key={manifest.adapter_id}
+                    >
+                      <div className="catalog-card-intro">
+                        <span className="catalog-card-icon" aria-hidden="true">
+                          {manifest.category === "test_fixture" ? (
+                            <IconTerminal2 size={23} stroke={1.8} />
+                          ) : (
+                            <IconApi size={23} stroke={1.8} />
+                          )}
+                        </span>
+                        <div className="catalog-card-copy">
+                          <div className="catalog-card-header">
+                            <span className="status-pill status-pill--enabled">Installed</span>
+                            <span className="catalog-category">{titleCase(manifest.category)}</span>
                           </div>
-                          <p>
-                            {profile.engine_display_name ||
-                              manifest?.display_name ||
-                              profile.adapter_id}{" "}
-                            · {titleCase(profile.integration_mode)}
-                          </p>
-                        </div>
-                        <div className="engine-actions">
-                          <button
-                            className="button button--quiet"
-                            disabled={!manifest || busyProfile === profile.id}
-                            title={
-                              manifest
-                                ? undefined
-                                : "This adapter is not installed. Reinstall it to probe this profile."
-                            }
-                            onClick={() => void probe(profile.id)}
-                            type="button"
-                          >
-                            {busyProfile === profile.id ? "Probing…" : "Probe"}
-                          </button>
-                          <button
-                            className="button button--quiet"
-                            onClick={() => void inspect(profile.id)}
-                            type="button"
-                          >
-                            {expanded[profile.id] ? "Hide details" : "Inspect"}
-                          </button>
-                          <button
-                            className="button button--quiet"
-                            disabled={!manifest || busyProfile === profile.id}
-                            title={
-                              manifest
-                                ? undefined
-                                : "This adapter is not installed. Remove the profile or reinstall its adapter to edit it."
-                            }
-                            onClick={() => {
-                              setDialogError("");
-                              setEditing(profile);
-                            }}
-                            type="button"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="button button--danger-quiet"
-                            disabled={busyProfile === profile.id}
-                            onClick={() => setRemovePrompt(profile)}
-                            type="button"
-                          >
-                            Remove
-                          </button>
+                          <h3>{manifest.display_name}</h3>
+                          <p>{manifest.description}</p>
                         </div>
                       </div>
-                      {!manifest && (
-                        <p className="inline-warning" role="status">
-                          Adapter {profile.adapter_id} is not installed. Probing and editing are
-                          unavailable; this profile can still be removed.
-                        </p>
-                      )}
-                      <dl className="profile-attributes">
-                        <div>
-                          <dt>Adapter</dt>
-                          <dd>{manifest?.display_name || profile.adapter_id}</dd>
+                      <div className="catalog-card-specs">
+                        <div className="catalog-meta">
+                          <span>Connection modes</span>
+                          <strong>{manifest.integration_modes.map(titleCase).join(" · ")}</strong>
                         </div>
-                        <div>
-                          <dt>Endpoint</dt>
-                          <dd>
-                            {profile.endpoint_url || "Not configured"}
-                            {profile.is_remote && <span className="remote-chip">Remote</span>}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Version</dt>
-                          <dd>{profile.engine_version || "Unknown / not probed"}</dd>
-                        </div>
-                        <div>
-                          <dt>Last probe</dt>
-                          <dd>{formatDate(profile.last_probed_at)}</dd>
-                        </div>
-                        <div>
-                          <dt>Credentials</dt>
-                          <dd>
-                            {profile.credential_configured
-                              ? "Configured · value hidden"
-                              : "Not configured"}
-                          </dd>
-                        </div>
-                      </dl>
-                      {expanded[profile.id] && (
-                        <div className="profile-inspection">
-                          {probeResult ? (
-                            <ProbeDetails
-                              result={probeResult}
-                              models={modelsState?.models}
-                              modelsLoading={modelsState?.loading}
-                              modelsError={modelsState?.error}
-                            />
+                        <details className="catalog-details catalog-capabilities">
+                          <summary>
+                            Declared capabilities
+                            <span>{manifest.declared_capabilities.length}</span>
+                          </summary>
+                          {manifest.declared_capabilities.length > 0 ? (
+                            <ul>
+                              {manifest.declared_capabilities.map((capability) => (
+                                <li key={capability}>{titleCase(capability)}</li>
+                              ))}
+                            </ul>
                           ) : (
-                            <>
-                              <div className="inspection-heading">
-                                <div>
-                                  <h4>Saved capability snapshot</h4>
-                                  <p>
-                                    {profile.last_probed_at
-                                      ? `Last updated ${formatDate(profile.last_probed_at)}`
-                                      : "No probe snapshot exists yet."}
-                                  </p>
-                                </div>
-                              </div>
-                              {savedCapabilities ? (
-                                <CapabilityTable items={savedCapabilities} />
-                              ) : (
-                                <p className="empty-inline">
-                                  Capabilities unknown until this profile has a probe result.
-                                </p>
-                              )}
-                              {modelsState?.loading && (
-                                <p role="status">Loading saved model inventory…</p>
-                              )}
-                              {modelsState?.error && (
-                                <p className="form-error" role="alert">
-                                  {modelsState.error}
-                                </p>
-                              )}
-                              {modelsState?.models && (
-                                <section>
-                                  <h4>Saved model inventory</h4>
-                                  {modelsState.models.length ? (
-                                    <div className="table-scroll">
-                                      <table>
-                                        <thead>
-                                          <tr>
-                                            <th scope="col">Model</th>
-                                            <th scope="col">Reference</th>
-                                            <th scope="col">State</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {modelsState.models.map((model) => (
-                                            <tr key={model.id}>
-                                              <th scope="row">{model.display_name}</th>
-                                              <td>{model.model_ref || "Unknown"}</td>
-                                              <td>{titleCase(model.status)}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  ) : (
-                                    <p className="empty-inline">
-                                      No saved model records. Inventory may be empty or unsupported;
-                                      check the capability value above.
-                                    </p>
-                                  )}
-                                </section>
-                              )}
-                            </>
+                            <p>Capabilities are not declared for this adapter.</p>
                           )}
-                        </div>
-                      )}
+                        </details>
+                        {manifest.known_limitations.length > 0 && (
+                          <details className="catalog-details catalog-limitations">
+                            <summary>Known limitations</summary>
+                            <ul>
+                              {manifest.known_limitations.map((limitation) => (
+                                <li key={limitation}>{limitation}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </div>
+                      <button
+                        className="button button--secondary catalog-card-action"
+                        onClick={() => {
+                          setDialogError("");
+                          setSelectedAdapterId(manifest.adapter_id);
+                          setEditing("new");
+                        }}
+                        type="button"
+                      >
+                        Add this adapter
+                      </button>
                     </article>
-                  );
-                })}
-              </div>
-            )
-          }
-        </ResourcePanel>
-      </section>
+                  ))}
+                </div>
+              )
+            }
+          </ResourcePanel>
+        </section>
+        <section className="panel engine-profiles-panel" aria-labelledby="engine-profiles-title">
+          <div className="section-title-row">
+            <div>
+              <p className="eyebrow">LOCAL CONNECTIONS</p>
+              <h2 id="engine-profiles-title">Engine profiles</h2>
+              <p className="engine-profiles-description">
+                Saved endpoints for your local inference workflows.
+              </p>
+            </div>
+            <button
+              className="button button--quiet"
+              onClick={() => void profiles.reload()}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+          {actionError && (
+            <p className="form-error" role="alert">
+              {actionError}
+            </p>
+          )}
+          <ResourcePanel
+            resource={profiles.resource}
+            onRetry={() => void profiles.reload()}
+            loadingLabel="Loading engine profiles…"
+          >
+            {(items) =>
+              items.length === 0 ? (
+                <div className="empty-inline empty-inline--action">
+                  <span className="engine-profile-empty-icon" aria-hidden="true">
+                    <IconServer size={34} stroke={1.7} />
+                  </span>
+                  <p>No engine profiles are configured.</p>
+                  <button
+                    className="button button--primary"
+                    disabled={!availableManifests.length}
+                    onClick={() => {
+                      setDialogError("");
+                      setSelectedAdapterId(availableManifests[0]?.adapter_id ?? "");
+                      setEditing("new");
+                    }}
+                    type="button"
+                  >
+                    Add your first engine
+                  </button>
+                </div>
+              ) : (
+                <div className="engine-profile-list">
+                  {items.map((profile) => {
+                    const manifest = manifestById.get(profile.adapter_id);
+                    const probeResult = probeResults[profile.id];
+                    const savedCapabilities = profile.capabilities;
+                    const modelsState = modelData[profile.id];
+                    return (
+                      <article className="engine-profile-card" key={profile.id}>
+                        <div className="engine-profile-header">
+                          <div>
+                            <div className="profile-name-row">
+                              <h3>{profile.label}</h3>
+                              <span className={`status-pill status-pill--${profile.status}`}>
+                                {statusLabel(profile.status)}
+                              </span>
+                            </div>
+                            <p>
+                              {profile.engine_display_name ||
+                                manifest?.display_name ||
+                                profile.adapter_id}{" "}
+                              · {titleCase(profile.integration_mode)}
+                            </p>
+                          </div>
+                          <div className="engine-actions">
+                            <button
+                              className="button button--quiet"
+                              disabled={!manifest || busyProfile === profile.id}
+                              title={
+                                manifest
+                                  ? undefined
+                                  : "This adapter is not installed. Reinstall it to probe this profile."
+                              }
+                              onClick={() => void probe(profile.id)}
+                              type="button"
+                            >
+                              {busyProfile === profile.id ? "Probing…" : "Probe"}
+                            </button>
+                            <button
+                              className="button button--quiet"
+                              onClick={() => void inspect(profile.id)}
+                              type="button"
+                            >
+                              {expanded[profile.id] ? "Hide details" : "Inspect"}
+                            </button>
+                            <button
+                              className="button button--quiet"
+                              disabled={!manifest || busyProfile === profile.id}
+                              title={
+                                manifest
+                                  ? undefined
+                                  : "This adapter is not installed. Remove the profile or reinstall its adapter to edit it."
+                              }
+                              onClick={() => {
+                                setDialogError("");
+                                setEditing(profile);
+                              }}
+                              type="button"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="button button--danger-quiet"
+                              disabled={busyProfile === profile.id}
+                              onClick={() => setRemovePrompt(profile)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                        {!manifest && (
+                          <p className="inline-warning" role="status">
+                            Adapter {profile.adapter_id} is not installed. Probing and editing are
+                            unavailable; this profile can still be removed.
+                          </p>
+                        )}
+                        <dl className="profile-attributes">
+                          <div>
+                            <dt>Adapter</dt>
+                            <dd>{manifest?.display_name || profile.adapter_id}</dd>
+                          </div>
+                          <div>
+                            <dt>Endpoint</dt>
+                            <dd>
+                              {profile.endpoint_url || "Not configured"}
+                              {profile.is_remote && <span className="remote-chip">Remote</span>}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Version</dt>
+                            <dd>{profile.engine_version || "Unknown / not probed"}</dd>
+                          </div>
+                          <div>
+                            <dt>Last probe</dt>
+                            <dd>{formatDate(profile.last_probed_at)}</dd>
+                          </div>
+                          <div>
+                            <dt>Credentials</dt>
+                            <dd>
+                              {profile.credential_configured
+                                ? "Configured · value hidden"
+                                : "Not configured"}
+                            </dd>
+                          </div>
+                        </dl>
+                        {expanded[profile.id] && (
+                          <div className="profile-inspection">
+                            {probeResult ? (
+                              <ProbeDetails
+                                result={probeResult}
+                                models={modelsState?.models}
+                                modelsLoading={modelsState?.loading}
+                                modelsError={modelsState?.error}
+                              />
+                            ) : (
+                              <>
+                                <div className="inspection-heading">
+                                  <div>
+                                    <h4>Saved capability snapshot</h4>
+                                    <p>
+                                      {profile.last_probed_at
+                                        ? `Last updated ${formatDate(profile.last_probed_at)}`
+                                        : "No probe snapshot exists yet."}
+                                    </p>
+                                  </div>
+                                </div>
+                                {savedCapabilities ? (
+                                  <CapabilityTable items={savedCapabilities} />
+                                ) : (
+                                  <p className="empty-inline">
+                                    Capabilities unknown until this profile has a probe result.
+                                  </p>
+                                )}
+                                {modelsState?.loading && (
+                                  <p role="status">Loading saved model inventory…</p>
+                                )}
+                                {modelsState?.error && (
+                                  <p className="form-error" role="alert">
+                                    {modelsState.error}
+                                  </p>
+                                )}
+                                {modelsState?.models && (
+                                  <section>
+                                    <h4>Saved model inventory</h4>
+                                    {modelsState.models.length ? (
+                                      <div className="table-scroll">
+                                        <table>
+                                          <thead>
+                                            <tr>
+                                              <th scope="col">Model</th>
+                                              <th scope="col">Reference</th>
+                                              <th scope="col">State</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {modelsState.models.map((model) => (
+                                              <tr key={model.id}>
+                                                <th scope="row">{model.display_name}</th>
+                                                <td>{model.model_ref || "Unknown"}</td>
+                                                <td>{titleCase(model.status)}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    ) : (
+                                      <p className="empty-inline">
+                                        No saved model records. Inventory may be empty or
+                                        unsupported; check the capability value above.
+                                      </p>
+                                    )}
+                                  </section>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )
+            }
+          </ResourcePanel>
+        </section>
+      </div>
       {editing && manifestById.get(editing === "new" ? selectedAdapterId : editing.adapter_id) && (
         <EngineProfileDialog
           busy={saving}
