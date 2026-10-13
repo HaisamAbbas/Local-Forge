@@ -472,6 +472,10 @@ async def _capture_native_metrics(
     stage: Literal["before", "after"],
     timeout_seconds: float,
 ) -> list[AdapterMetric] | None:
+    if "native_metrics" not in catalog.manifest_for(engine.adapter_id).declared_capabilities:
+        # The catalog rejects snapshots from adapters that do not declare them, so there is
+        # nothing to read and nothing worth warning about.
+        return None
     try:
         result: MetricsResult = await asyncio.wait_for(
             catalog.read_metrics(engine.adapter_id, config), timeout=timeout_seconds

@@ -948,6 +948,14 @@ def test_per_request_native_adapter_gets_token_counts_and_run_aggregates_without
         # Per-request values are not expected in before/after snapshots, so no placeholders.
         assert not any("snapshot" in item.labels for item in metrics)
         assert not any(item.aggregation == "delta" for item in metrics)
+        # Without an aggregate endpoint there is no snapshot to read, so nothing to warn about.
+        warning_codes = [
+            event.payload.get("code")
+            for event in list_run_events(connection, run.id)
+            if event.event_type == "warning"
+        ]
+        assert "native_metrics_unavailable" not in warning_codes
+        assert "native_metric_missing" not in warning_codes
         mean = next(
             item
             for item in metrics
