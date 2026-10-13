@@ -34,6 +34,7 @@ from localforge.core.models import (
     EngineProfile,
     JsonValue,
     MachineProfile,
+    ModelArtifact,
 )
 from localforge.core.urls import endpoint_is_remote
 from localforge.runs import (
@@ -127,6 +128,11 @@ def _run_profile_snapshot(
         if machine_id is not None
         else None
     )
+    model = (
+        RecordRepository(connection, ModelArtifact).get(plan.model_artifact_id)
+        if plan.model_artifact_id is not None
+        else None
+    )
     capability_snapshot = (
         RecordRepository(connection, CapabilitySnapshot).get(engine.capability_snapshot_id)
         if engine.capability_snapshot_id is not None
@@ -173,6 +179,26 @@ def _run_profile_snapshot(
                 "capabilities": capabilities,
                 "selected_model_ref": engine.selected_model_ref,
             },
+            "model_artifact": (
+                {
+                    "id": str(model.id),
+                    "display_name": model.display_name,
+                    "engine_profile_id": (
+                        str(model.engine_profile_id)
+                        if model.engine_profile_id is not None
+                        else None
+                    ),
+                    "model_ref": model.model_ref,
+                    "revision": model.revision,
+                    "format": model.format,
+                    "size_bytes": model.size_bytes,
+                    "tokenizer_identity": model.tokenizer_identity,
+                    "max_context_tokens": model.max_context_tokens,
+                    "engine_extensions": model.engine_extensions,
+                }
+                if model is not None
+                else None
+            ),
         },
     )
 
