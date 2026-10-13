@@ -46,7 +46,7 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     catalog = default_adapter_catalog()
     manifests = catalog.list_manifests()
 
-    assert len(manifests) == 4
+    assert len(manifests) == 6
     manifest = next(item for item in manifests if item.adapter_id == FAKE_ADAPTER_ID)
     assert isinstance(manifest, AdapterManifest)
     assert manifest.adapter_id == FAKE_ADAPTER_ID
@@ -75,6 +75,11 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     assert ollama.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert "server_reported_durations" in ollama.declared_capabilities
     assert not ollama.declared_capabilities.intersection({"managed_process", "cancellation"})
+    vllm = next(item for item in manifests if item.adapter_id == "localforge.vllm")
+    sglang = next(item for item in manifests if item.adapter_id == "localforge.sglang")
+    assert vllm.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+    assert sglang.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+    assert vllm.adapter_id != sglang.adapter_id
 
     with pytest.raises(ValidationError, match="adapter_id"):
         AdapterManifest.model_validate(

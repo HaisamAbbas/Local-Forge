@@ -578,8 +578,10 @@ async def probe_engine_profile(
         disclosure = RemoteEgressDisclosure(
             host=hostname,
             message=(
-                f"This profile targets remote host {hostname}. Probing may send a minimal chat "
-                "completion check. Benchmark prompts and requests will leave this machine. "
+                f"This profile targets remote host {hostname}. Probing may send one or more "
+                "short chat-completion checks, including a separate usage-count check when the "
+                "adapter is configured to request usage. Benchmark prompts and requests will "
+                "leave this machine. "
                 "Confirm remote use before contacting this target."
             ),
         )

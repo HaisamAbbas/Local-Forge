@@ -351,6 +351,8 @@ def test_remote_probe_discloses_egress_before_any_adapter_call(tmp_path) -> None
         assert disclosure["code"] == "remote_confirmation_required"
         assert disclosure["host"] == "inference.example"
         assert disclosure["request_will_be_sent"] is False
+        assert "one or more short chat-completion checks" in disclosure["message"]
+        assert "usage-count check" in disclosure["message"]
         assert "will leave this machine" in disclosure["message"]
         assert not scenario.probe_started.is_set()
 

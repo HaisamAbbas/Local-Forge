@@ -11,7 +11,7 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
 
     assert response.status_code == 200
     manifests = response.json()
-    assert len(manifests) == 4
+    assert len(manifests) == 6
     fake = next(item for item in manifests if item["adapter_id"] == "localforge.fake")
     assert fake["adapter_version"] == "1.0.0"
     assert fake["category"] == "test_fixture"
@@ -28,3 +28,8 @@ def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
     ollama = next(item for item in manifests if item["adapter_id"] == "localforge.ollama")
     assert ollama["integration_modes"] == ["attached_endpoint"]
     assert "server_reported_durations" in ollama["declared_capabilities"]
+    vllm = next(item for item in manifests if item["adapter_id"] == "localforge.vllm")
+    sglang = next(item for item in manifests if item["adapter_id"] == "localforge.sglang")
+    assert vllm["integration_modes"] == ["attached_endpoint"]
+    assert sglang["integration_modes"] == ["attached_endpoint"]
+    assert vllm["adapter_id"] != sglang["adapter_id"]
