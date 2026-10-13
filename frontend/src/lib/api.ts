@@ -362,6 +362,158 @@ export type BenchmarkPreflight = {
 
 export type BenchmarkPlanResponse = { plan: BenchmarkPlan; preflight: BenchmarkPreflight };
 
+export type ExperimentTrial = {
+  order: number;
+  variant_name: string;
+  variant_value: unknown;
+  repetition: number;
+  plan_id: string;
+  run_id: string | null;
+  status: "pending" | "launching" | "running" | "succeeded" | "failed";
+  launch_started_at: string | null;
+  error: string | null;
+};
+
+export type ExperimentGroup = {
+  id: string;
+  name: string;
+  status: "draft" | "running" | "completed" | "failed";
+  run_ids: string[];
+  description: string | null;
+  baseline_plan_id: string | null;
+  independent_variable: string | null;
+  baseline_value: unknown;
+  variants: Array<{ name: string; value: unknown }>;
+  repetitions: number;
+  randomize_order: boolean;
+  order_seed: number;
+  estimated_duration_seconds: number | null;
+  trials: ExperimentTrial[];
+};
+
+export type ExperimentCreateResponse = {
+  group: ExperimentGroup;
+  estimated_run_count: number;
+  estimated_duration_seconds: number | null;
+};
+
+export type ExperimentSummary = {
+  experiment_group_id: string;
+  name: string;
+  status: string;
+  independent_variable: string | null;
+  hypothesis: string | null;
+  repetitions: number;
+  randomize_order: boolean;
+  order_seed: number;
+  comparison: RunComparison | null;
+  variants: Array<{
+    name: string;
+    value: unknown;
+    trial_count: number;
+    succeeded_count: number;
+    failed_count: number;
+    metrics: Array<{
+      metric_name: string;
+      labels: Record<string, string>;
+      unit: string;
+      source: string;
+      aggregation: string;
+      definition: string;
+      formula: string;
+      method_version: string;
+      metric_kind: "gauge" | "counter";
+      median: number | null;
+      spread_min: number | null;
+      spread_max: number | null;
+      repeat_count: number;
+      sample_count: number;
+    }>;
+  }>;
+  failed_trials: ExperimentTrial[];
+};
+
+export type RunComparison = {
+  run_ids: string[];
+  baseline_run_id: string;
+  declared_variable: { path: string; values: unknown[] } | null;
+  grade: "A" | "B" | "C" | "not_comparable";
+  label: string;
+  rationale: string;
+  controlled_comparison_badge: boolean;
+  causal_interpretation_allowed: boolean;
+  dimensions: Array<{
+    key: string;
+    label: string;
+    state: string;
+    values: unknown[];
+    changes?: unknown[];
+  }>;
+  workload_changes: unknown[];
+  excluded_metrics: Array<{ metric_name: string; reason: string }>;
+  shared_metrics: Array<{
+    metric_name: string;
+    unit: string;
+    source: string;
+    aggregation: string;
+    definition: string;
+    formula: string;
+    method_version: string;
+    metric_kind: "gauge" | "counter";
+    labels: Record<string, string>;
+    baseline_run_id: string;
+    runs: Record<string, { value: number | null; sample_count: number; record_count: number }>;
+    observed_deltas: Record<string, number | null>;
+  }>;
+  run_statuses: Record<string, string>;
+};
+
+export type ReportMetadata = {
+  id: string;
+  name: string;
+  format: "json" | "csv" | "markdown";
+  status: "ready" | "failed";
+  run_ids: string[];
+  generated_at: string;
+  export_ref: string | null;
+  filename: string | null;
+  content_included: boolean;
+  error_message: string | null;
+  redacted_summary: string | null;
+};
+
+export type ExperimentCreateInput = {
+  name: string;
+  baseline_plan_id: string;
+  independent_variable: string;
+  variants: Array<{ name: string; value: string | number }>;
+  repetitions: number;
+  randomize_order: boolean;
+  order_seed: number;
+  hypothesis: string | null;
+};
+
+export type ReproduciblePlan = {
+  format_version: 1;
+  app_version: string;
+  database_schema_version: number;
+  exported_at: string;
+  workload: Workload;
+  plan: {
+    name: string;
+    engine_profile_id: string;
+    machine_profile_id: string | null;
+    model_artifact_id: string | null;
+    warmup_requests: number;
+    measured_requests: number | null;
+    measurement_duration_seconds: number | null;
+    concurrency: number;
+    timeout_seconds: number;
+    retain_prompt_output: boolean;
+    dataset_snapshot_hash: string | null;
+  };
+};
+
 export type EngineProfileInput = {
   label: string;
   adapter_id: string;
@@ -507,6 +659,53 @@ export const listRunMetrics = (id: string) =>
 export const listDatasets = () => apiRequest<Dataset[]>("/api/v1/datasets");
 export const listWorkloads = () => apiRequest<Workload[]>("/api/v1/workloads");
 export const listBenchmarkPlans = () => apiRequest<BenchmarkPlan[]>("/api/v1/benchmark-plans");
+export const importBenchmarkPlan = (bundle: ReproduciblePlan) =>
+  apiRequest<BenchmarkPlanResponse>("/api/v1/benchmark-plans/import", {
+    method: "POST",
+    body: JSON.stringify(bundle),
+  });
+export const listExperimentGroups = () => apiRequest<ExperimentGroup[]>("/api/v1/experiments");
+export const getExperimentGroup = (id: string) =>
+  apiRequest<ExperimentGroup>(`/api/v1/experiments/${id}`);
+export const getExperimentSummary = (id: string) =>
+  apiRequest<ExperimentSummary>(`/api/v1/experiments/${id}/summary`);
+export const createExperimentGroup = (input: ExperimentCreateInput) =>
+  apiRequest<ExperimentCreateResponse>("/api/v1/experiments", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const startExperimentGroup = (id: string, confirmEstimatedRuntime: boolean) =>
+  apiRequest<ExperimentGroup>(`/api/v1/experiments/${id}/start`, {
+    method: "POST",
+    body: JSON.stringify({ confirm_estimated_runtime: confirmEstimatedRuntime }),
+  });
+export const launchNextExperimentTrial = (id: string) =>
+  apiRequest<{ group: ExperimentGroup; run: BenchmarkRun | null }>(
+    `/api/v1/experiments/${id}/next`,
+    { method: "POST", body: "{}" },
+  );
+export const compareRuns = (input: {
+  run_ids: string[];
+  baseline_run_id?: string | null;
+  declared_variable?: string | null;
+}) =>
+  apiRequest<RunComparison>("/api/v1/comparisons", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const createReport = (input: {
+  name: string;
+  filename: string | null;
+  format: "json" | "csv" | "markdown";
+  run_ids: string[];
+  baseline_run_id: string | null;
+  experiment_group_id: string | null;
+  include_retained_content: boolean;
+}) =>
+  apiRequest<{ report: ReportMetadata }>("/api/v1/reports", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 export const listEngineModels = (id: string) =>
   apiRequest<EngineModel[]>(`/api/v1/engines/${id}/models`);
 

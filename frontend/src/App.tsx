@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
+import { ExperimentsScreen } from "./components/ExperimentsScreen";
 import { RunsScreen } from "./components/RunsScreen";
 import { WorkloadsScreen } from "./components/WorkloadsScreen";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
@@ -141,8 +142,10 @@ export function App() {
                 window.location.hash = id ? `runs?run=${encodeURIComponent(id)}` : "runs";
               }}
             />
+          ) : activeScreen === "experiments" ? (
+            <ExperimentsScreen />
           ) : (
-            <SectionEmptyState screen={activeScreen} />
+            <SectionEmptyState />
           )}
         </main>
       </div>
@@ -150,42 +153,22 @@ export function App() {
   );
 }
 
-function SectionEmptyState({ screen }: { screen: "experiments" | "learning" }) {
+function SectionEmptyState() {
   return (
     <section className="section-empty-state" aria-live="polite">
-      <p className="eyebrow">
-        {screen === "experiments" ? "CONTROLLED COMPARISONS" : "INFERENCE FIELD NOTES"}
-      </p>
-      <h2>
-        {screen === "experiments"
-          ? "Compare one change at a time."
-          : "Build intuition from measured results."}
-      </h2>
+      <p className="eyebrow">INFERENCE FIELD NOTES</p>
+      <h2>Build intuition from measured results.</h2>
       <p>
-        {screen === "experiments"
-          ? "Side-by-side experiment workflows are not available yet. You can still create a repeatable workload and inspect its measured runs."
-          : "Learning guides are not available yet. Start with your machine details, then run a workload to see how your chosen engine responds."}
+        Learning guides are not available yet. Start with your machine details, then run a workload
+        to see how your chosen engine responds.
       </p>
       <div className="section-empty-actions">
-        {screen === "experiments" ? (
-          <>
-            <a className="button button--primary" href="#workloads">
-              Open workloads
-            </a>
-            <a className="text-link" href="#runs">
-              View run history
-            </a>
-          </>
-        ) : (
-          <>
-            <a className="button button--primary" href="#system">
-              Inspect this machine
-            </a>
-            <a className="text-link" href="#workloads">
-              Build a workload
-            </a>
-          </>
-        )}
+        <a className="button button--primary" href="#system">
+          Inspect this machine
+        </a>
+        <a className="text-link" href="#workloads">
+          Build a workload
+        </a>
       </div>
     </section>
   );
