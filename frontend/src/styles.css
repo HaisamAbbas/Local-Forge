@@ -3599,7 +3599,7 @@ body {
   display: flex;
   min-height: 38px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 18px;
   padding: 5px clamp(16px, 2vw, 30px);
   border-bottom: 1px solid var(--color-border-subtle);
@@ -3610,6 +3610,7 @@ body {
   display: flex;
   min-width: 0;
   align-items: baseline;
+  justify-content: center;
   gap: 12px;
 }
 
@@ -3823,7 +3824,7 @@ body {
 
 .page-heading--engines {
   position: relative;
-  min-height: 370px;
+  min-height: clamp(420px, 34vw, 520px);
   align-items: flex-end;
   justify-content: space-between;
   margin: 0 0 0;
@@ -3833,7 +3834,7 @@ body {
   background-image:
     linear-gradient(90deg, rgb(5 6 5 / 20%) 0%, rgb(5 6 5 / 10%) 44%, rgb(5 6 5 / 4%) 100%),
     linear-gradient(0deg, rgb(5 6 5 / 32%) 0%, transparent 52%),
-    url("/images/localforge-inference-hero.jpg");
+    url("/images/localforge-engine-hero.jpg");
   background-position:
     center,
     center,
@@ -3855,10 +3856,10 @@ body {
 }
 
 .page-heading--engines .page-description {
-  max-width: 440px;
+  max-width: 480px;
   margin: 0;
   color: #d3d4cc;
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1.55;
 }
 
@@ -3900,9 +3901,9 @@ body {
   min-height: 585px;
   margin: 0;
   padding: 20px;
-  border: 1px solid #292b25;
+  border: 1px solid #34372f;
   border-radius: 2px;
-  background: #0c0d0b;
+  background: #0d0e0c;
 }
 
 .engine-catalog-panel .section-title-row,
@@ -4002,18 +4003,18 @@ body {
   align-items: start;
   gap: 10px 16px;
   padding: 17px 14px;
-  border: 1px solid #30332b;
+  border: 1px solid #3a3d34;
   border-top-width: 1px;
   border-radius: 2px;
-  background: #11130f;
+  background: #131510;
   transition:
     background-color 140ms ease-out,
     border-color 140ms ease-out;
 }
 
 .catalog-card:hover {
-  border-color: #69714f;
-  background: #151711;
+  border-color: #7a8655;
+  background: #191c13;
 }
 
 .catalog-card--fixture {
@@ -4560,7 +4561,7 @@ table td {
   }
 
   .page-heading--engines {
-    min-height: 236px;
+    min-height: 300px;
     padding: 26px 22px;
     background-position:
       center,
@@ -4647,13 +4648,13 @@ table td {
   }
 
   .page-heading--engines {
-    min-height: 230px;
+    min-height: 250px;
     justify-content: flex-end;
     padding: 24px 16px 20px;
     background-image:
       linear-gradient(90deg, rgb(7 13 12 / 52%) 0%, rgb(7 13 12 / 32%) 45%, rgb(7 13 12 / 8%) 100%),
       linear-gradient(0deg, rgb(7 10 10 / 36%) 0%, transparent 48%),
-      url("/images/localforge-inference-hero.jpg");
+      url("/images/localforge-engine-hero.jpg");
     background-position:
       center,
       center,
