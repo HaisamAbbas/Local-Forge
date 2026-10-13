@@ -205,6 +205,129 @@ function titleCase(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+type ManifestConfigProperty = {
+  type?: string | string[];
+  format?: string;
+  title?: string;
+  description?: string;
+  default?: unknown;
+  required?: unknown;
+  minimum?: number;
+  maximum?: number;
+  enum?: unknown[];
+  properties?: unknown;
+};
+
+type AdapterConfigField = {
+  namespace: string;
+  name: string;
+  property: ManifestConfigProperty;
+  required: boolean;
+};
+
+function schemaProperties(value: unknown): Record<string, ManifestConfigProperty> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, ManifestConfigProperty] =>
+        Boolean(entry[1]) && typeof entry[1] === "object" && !Array.isArray(entry[1]),
+    ),
+  );
+}
+
+function requiredSchemaFields(value: unknown): Set<string> {
+  return new Set(
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [],
+  );
+}
+
+function adapterConfigFields(manifest: AdapterManifest): AdapterConfigField[] {
+  const rootProperties = schemaProperties(manifest.config_schema.properties);
+  const defaultNamespace = adapterExtensionNamespace(manifest);
+  if (manifest.category === "library_pipeline") {
+    const required = requiredSchemaFields(manifest.config_schema.required);
+    return Object.entries(rootProperties).map(([name, property]) => ({
+      namespace: defaultNamespace,
+      name,
+      property,
+      required: required.has(name),
+    }));
+  }
+
+  const extensionProperties = schemaProperties(rootProperties.engine_extensions?.properties);
+  const fields: AdapterConfigField[] = [];
+  for (const [name, value] of Object.entries(extensionProperties)) {
+    const nestedProperties = schemaProperties(value.properties);
+    if (Object.keys(nestedProperties).length > 0) {
+      const required = requiredSchemaFields(value.required);
+      fields.push(
+        ...Object.entries(nestedProperties).map(([fieldName, property]) => ({
+          namespace: name,
+          name: fieldName,
+          property,
+          required: required.has(fieldName),
+        })),
+      );
+    } else {
+      fields.push({
+        namespace: defaultNamespace,
+        name,
+        property: value,
+        required: false,
+      });
+    }
+  }
+  return fields;
+}
+
+function adapterExtensionNamespace(manifest: AdapterManifest): string {
+  return manifest.adapter_id.split(".").slice(1).join(".");
+}
+
+function integrationModeLabel(mode: EngineMode): string {
+  switch (mode) {
+    case "attached_endpoint":
+      return "Attached endpoint (local or remote)";
+    case "managed_process":
+      return "Managed local process";
+    case "library_pipeline":
+      return "Isolated local library pipeline";
+    case "composed_serving_stack":
+      return "Composed serving stack";
+  }
+}
+
+function operatingSystemLabel(platform: string): string {
+  return platform === "macos" ? "macOS" : titleCase(platform);
+}
+
+function profileConnectionLabel(profile: EngineProfile): string {
+  if (profile.integration_mode === "managed_process") return "Managed local process";
+  if (profile.integration_mode === "library_pipeline") return "Local library pipeline";
+  if (profile.integration_mode === "composed_serving_stack") {
+    return profile.is_remote ? "Remote serving stack" : "Local serving stack";
+  }
+  if (!profile.endpoint_url) return "Endpoint not configured";
+  return profile.is_remote ? "Remote endpoint" : "Local endpoint";
+}
+
+function versionCoverageLabel(manifest: AdapterManifest): string {
+  if (manifest.implementation_status !== "implemented") return "No fixture coverage (planned)";
+  if (manifest.version_tested.length === 0) return "No fixture version recorded";
+  const fixtureVersions = manifest.version_tested.filter((value) =>
+    /local api fixture/i.test(value),
+  );
+  const releaseVersions = manifest.version_tested.filter(
+    (value) => !/local api fixture/i.test(value),
+  );
+  return [
+    fixtureVersions.length ? `Local fixture: ${fixtureVersions.join(" · ")}` : "",
+    releaseVersions.length ? `Recorded version: ${releaseVersions.join(" · ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function statusLabel(value: string): string {
   return titleCase(value);
 }
@@ -666,13 +789,19 @@ function EngineProfileDialog({
   const isLlamaCpp = manifest.adapter_id === "localforge.llama_cpp";
   const isOllama = manifest.adapter_id === "localforge.ollama";
   const isLocalAI = manifest.adapter_id === "localforge.localai";
+  const isLibraryPipeline = manifest.category === "library_pipeline";
+  const configFields = adapterConfigFields(manifest);
+  const isSchemaDrivenAdapter =
+    !isOpenAiCompatible && !isLlamaCpp && !isOllama && !isLocalAI && configFields.length > 0;
   const extensionNamespace = isLlamaCpp
     ? "llama_cpp"
     : isOllama
       ? "ollama"
       : isLocalAI
         ? "localai"
-        : "openai_compatible";
+        : isOpenAiCompatible
+          ? "openai_compatible"
+          : (configFields[0]?.namespace ?? adapterExtensionNamespace(manifest));
   const savedExtension = initial?.engine_extensions?.[extensionNamespace] ?? {};
   const savedString = (key: string, fallback: string) => {
     const value = savedExtension[key];
@@ -716,6 +845,22 @@ function EngineProfileDialog({
           integration_mode: manifest.integration_modes[0] ?? "",
           endpoint_url: isOllama ? "http://127.0.0.1:11434" : blankEngineForm.endpoint_url,
         },
+  );
+  const [adapterSettings, setAdapterSettings] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      configFields.map(({ namespace, name, property }) => {
+        const saved = initial?.engine_extensions?.[namespace]?.[name];
+        const value = saved ?? property.default;
+        return [
+          `${namespace}.${name}`,
+          typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+            ? String(value)
+            : property.type === "boolean"
+              ? "false"
+              : "",
+        ];
+      }),
+    ),
   );
   const [formError, setFormError] = useState("");
   const setField = <K extends keyof EngineFormValues>(key: K, value: EngineFormValues[K]) =>
@@ -884,6 +1029,52 @@ function EngineProfileDialog({
         return;
       }
     }
+    const parsedAdapterSettings: Record<string, Record<string, unknown>> = {};
+    if (isSchemaDrivenAdapter) {
+      for (const { namespace, name, property, required } of configFields) {
+        const raw = adapterSettings[`${namespace}.${name}`]?.trim() ?? "";
+        if (!raw && required) {
+          setFormError(`${property.title || titleCase(name)} is required.`);
+          return;
+        }
+        if (!raw) continue;
+        const propertyType = Array.isArray(property.type)
+          ? property.type.find((item) => item !== "null")
+          : property.type;
+        let parsedValue: unknown = raw;
+        if (propertyType === "boolean") {
+          parsedValue = raw === "true";
+        }
+        if (propertyType === "number" || propertyType === "integer") {
+          const numericValue = Number(raw);
+          if (
+            !Number.isFinite(numericValue) ||
+            (propertyType === "integer" && !Number.isInteger(numericValue)) ||
+            (property.minimum !== undefined && numericValue < property.minimum) ||
+            (property.maximum !== undefined && numericValue > property.maximum)
+          ) {
+            setFormError(
+              `${property.title || titleCase(name)} must be a ${
+                propertyType === "integer" ? "whole number" : "number"
+              }${property.minimum !== undefined ? ` from ${property.minimum}` : ""}${
+                property.maximum !== undefined ? ` to ${property.maximum}` : ""
+              }.`,
+            );
+            return;
+          }
+          parsedValue = numericValue;
+        }
+        if (property.enum?.length) {
+          const enumValue = property.enum.find((option) => String(option) === raw);
+          if (enumValue === undefined) {
+            setFormError(`${property.title || titleCase(name)} has an unsupported value.`);
+            return;
+          }
+          parsedValue = enumValue;
+        }
+        (parsedAdapterSettings[namespace] ??= {})[name] = parsedValue;
+      }
+    }
     setFormError("");
     const input: EngineProfileInput = {
       label: values.label.trim(),
@@ -893,9 +1084,9 @@ function EngineProfileDialog({
       endpoint_url: values.endpoint_url.trim() || null,
       user_notes: values.user_notes.trim() || null,
     };
-    if (!isLlamaCpp && !isOllama && (!initial || values.health_route.trim()))
+    if (!isLlamaCpp && !isOllama && !isLibraryPipeline && (!initial || values.health_route.trim()))
       input.health_route = values.health_route.trim() || null;
-    if (!isLlamaCpp && !isOllama && (!initial || values.models_route.trim()))
+    if (!isLlamaCpp && !isOllama && !isLibraryPipeline && (!initial || values.models_route.trim()))
       input.models_route = values.models_route.trim() || null;
     if (isOpenAiCompatible) {
       const extension: Record<string, unknown> = { ...savedExtension };
@@ -963,6 +1154,24 @@ function EngineProfileDialog({
         localai: extension,
       };
     }
+    if (isSchemaDrivenAdapter) {
+      const extensions: Record<string, Record<string, unknown>> = {
+        ...(initial?.engine_extensions ?? {}),
+      };
+      for (const { namespace, name } of configFields) {
+        const namespaceSettings = { ...(extensions[namespace] ?? {}) };
+        const parsedSettings = parsedAdapterSettings[namespace];
+        if (parsedSettings && Object.hasOwn(parsedSettings, name)) {
+          namespaceSettings[name] = parsedSettings[name];
+        } else {
+          delete namespaceSettings[name];
+        }
+        extensions[namespace] = namespaceSettings;
+      }
+      input.engine_extensions = {
+        ...extensions,
+      };
+    }
     onSubmit(input);
   };
 
@@ -1015,42 +1224,44 @@ function EngineProfileDialog({
               <option value="">Choose a mode</option>
               {manifest.integration_modes.map((mode) => (
                 <option key={mode} value={mode}>
-                  {titleCase(mode)}
+                  {integrationModeLabel(mode)}
                 </option>
               ))}
             </select>
           </label>
-          <label>
-            {isOpenAiCompatible
-              ? "API base URL"
-              : isOllama
-                ? "Ollama local server URL"
-                : isLlamaCpp && values.integration_mode === "managed_process"
-                  ? "Local bind URL"
-                  : isLlamaCpp
-                    ? "llama-server endpoint URL"
-                    : "Endpoint URL"}{" "}
-            {!isOpenAiCompatible && !isLlamaCpp && !isOllama && (
-              <span className="optional-label">Optional</span>
-            )}
-            <input
-              autoComplete="url"
-              maxLength={1000}
-              onChange={(event) => setField("endpoint_url", event.target.value)}
-              placeholder={
-                isOpenAiCompatible
-                  ? "http://127.0.0.1:8000/v1"
-                  : isOllama
-                    ? "http://127.0.0.1:11434"
+          {!isLibraryPipeline && (
+            <label>
+              {isOpenAiCompatible
+                ? "API base URL"
+                : isOllama
+                  ? "Ollama local server URL"
+                  : isLlamaCpp && values.integration_mode === "managed_process"
+                    ? "Local bind URL"
                     : isLlamaCpp
-                      ? "http://127.0.0.1:9931"
-                      : "http://127.0.0.1:8000"
-              }
-              required={isOpenAiCompatible || isLlamaCpp || isOllama}
-              type="url"
-              value={values.endpoint_url}
-            />
-          </label>
+                      ? "llama-server endpoint URL"
+                      : "Endpoint URL"}{" "}
+              {!isOpenAiCompatible && !isLlamaCpp && !isOllama && (
+                <span className="optional-label">Optional</span>
+              )}
+              <input
+                autoComplete="url"
+                maxLength={1000}
+                onChange={(event) => setField("endpoint_url", event.target.value)}
+                placeholder={
+                  isOpenAiCompatible
+                    ? "http://127.0.0.1:8000/v1"
+                    : isOllama
+                      ? "http://127.0.0.1:11434"
+                      : isLlamaCpp
+                        ? "http://127.0.0.1:9931"
+                        : "http://127.0.0.1:8000"
+                }
+                required={isOpenAiCompatible || isLlamaCpp || isOllama}
+                type="url"
+                value={values.endpoint_url}
+              />
+            </label>
+          )}
           <label>
             Engine display name <span className="optional-label">Optional</span>
             <input
@@ -1340,9 +1551,107 @@ function EngineProfileDialog({
               </span>
             </label>
           )}
+          {isSchemaDrivenAdapter && (
+            <section className="adapter-config-fields" aria-labelledby="adapter-settings-title">
+              <h3 id="adapter-settings-title">
+                {isLibraryPipeline ? "Local pipeline settings" : "Adapter settings"}
+              </h3>
+              {isLibraryPipeline && (
+                <p className="helper-copy">
+                  Uses an existing model and installed runtime on this machine. LOCALFORGE does not
+                  install packages or download model files.
+                </p>
+              )}
+              {configFields.map(({ namespace, name, property, required }) => {
+                const fieldId = `adapter-setting-${namespace}-${name}`;
+                const value = adapterSettings[`${namespace}.${name}`] ?? "";
+                const propertyType = Array.isArray(property.type)
+                  ? property.type.find((item) => item !== "null")
+                  : property.type;
+                const title = property.title || titleCase(name);
+                const enumValues = property.enum ?? [];
+                const helper = property.description;
+                if (propertyType === "boolean") {
+                  return (
+                    <label className="workload-check" htmlFor={fieldId} key={fieldId}>
+                      <input
+                        checked={value === "true"}
+                        id={fieldId}
+                        onChange={(event) =>
+                          setAdapterSettings((current) => ({
+                            ...current,
+                            [`${namespace}.${name}`]: String(event.target.checked),
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      {title}
+                      {helper && <span className="helper-copy">{helper}</span>}
+                    </label>
+                  );
+                }
+                return (
+                  <label htmlFor={fieldId} key={fieldId}>
+                    {title} {!required && <span className="optional-label">Optional</span>}
+                    {enumValues.length > 0 ? (
+                      <select
+                        id={fieldId}
+                        onChange={(event) =>
+                          setAdapterSettings((current) => ({
+                            ...current,
+                            [`${namespace}.${name}`]: event.target.value,
+                          }))
+                        }
+                        required={required}
+                        value={value}
+                      >
+                        {!required && <option value="">Use adapter default</option>}
+                        {enumValues.map((option) => (
+                          <option key={String(option)} value={String(option)}>
+                            {String(option)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        autoComplete="off"
+                        id={fieldId}
+                        max={property.maximum}
+                        maxLength={
+                          propertyType === "number" || propertyType === "integer" ? undefined : 4096
+                        }
+                        min={property.minimum}
+                        onChange={(event) =>
+                          setAdapterSettings((current) => ({
+                            ...current,
+                            [`${namespace}.${name}`]: event.target.value,
+                          }))
+                        }
+                        required={required}
+                        step={
+                          propertyType === "integer"
+                            ? 1
+                            : propertyType === "number"
+                              ? "any"
+                              : undefined
+                        }
+                        type={
+                          propertyType === "number" || propertyType === "integer"
+                            ? "number"
+                            : "text"
+                        }
+                        value={value}
+                      />
+                    )}
+                    {helper && <span className="helper-copy">{helper}</span>}
+                  </label>
+                );
+              })}
+            </section>
+          )}
           <details className="advanced-fields">
             <summary>Connection details</summary>
-            {!isLlamaCpp && !isOllama && (
+            {!isLlamaCpp && !isOllama && !isLibraryPipeline && (
               <>
                 <label>
                   Health route <span className="optional-label">Optional</span>
@@ -1800,7 +2109,7 @@ export function EnginesScreen() {
         <section className="panel engine-catalog-panel" aria-labelledby="engine-catalog-title">
           <div className="section-title-row">
             <div>
-              <p className="eyebrow">01 / INSTALLED ADAPTERS</p>
+              <p className="eyebrow">01 / ADAPTER CATALOG</p>
               <h2 id="engine-catalog-title">Engine catalog</h2>
             </div>
             <button
@@ -1817,8 +2126,8 @@ export function EnginesScreen() {
             </button>
           </div>
           <p className="helper-copy">
-            Only adapters registered with this local service are shown. Connection modes and known
-            limitations come from each adapter manifest.
+            Implemented entries are available to configure. Planned entries are catalog references
+            only. Fixture checks do not claim that an upstream engine release was live-tested.
           </p>
           <ResourcePanel
             resource={catalog.resource}
@@ -1857,9 +2166,14 @@ export function EnginesScreen() {
                               }`}
                             >
                               {manifest.implementation_status === "implemented"
-                                ? "Installed"
+                                ? "Implemented"
                                 : titleCase(manifest.implementation_status)}
                             </span>
+                            {manifest.implementation_status === "implemented" && (
+                              <span className="status-pill status-pill--enabled">
+                                Fixture contract tested
+                              </span>
+                            )}
                             {manifest.maintenance_mode && (
                               <span className="status-pill status-pill--needs_attention">
                                 Maintenance mode
@@ -1877,15 +2191,23 @@ export function EnginesScreen() {
                         )}
                         <div className="catalog-meta">
                           <span>Connection modes</span>
-                          <strong>{manifest.integration_modes.map(titleCase).join(" · ")}</strong>
+                          <strong>
+                            {manifest.integration_modes.length
+                              ? manifest.integration_modes.map(integrationModeLabel).join(" · ")
+                              : "No callable integration mode"}
+                          </strong>
                         </div>
                         <div className="catalog-meta">
-                          <span>Fixture version coverage</span>
+                          <span>LOCALFORGE host OS</span>
                           <strong>
-                            {manifest.version_tested.length > 0
-                              ? manifest.version_tested.join(" · ")
-                              : "No version fixture recorded"}
+                            {manifest.operating_systems.length
+                              ? manifest.operating_systems.map(operatingSystemLabel).join(" · ")
+                              : "Not specified"}
                           </strong>
+                        </div>
+                        <div className="catalog-meta">
+                          <span>Version test evidence</span>
+                          <strong>{versionCoverageLabel(manifest)}</strong>
                         </div>
                         <details className="catalog-details catalog-capabilities">
                           <summary>
@@ -1911,6 +2233,16 @@ export function EnginesScreen() {
                               ))}
                             </ul>
                           </details>
+                        )}
+                        {manifest.documentation_url && (
+                          <a
+                            className="catalog-doc-link"
+                            href={manifest.documentation_url}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            Adapter documentation
+                          </a>
                         )}
                       </div>
                       {manifest.implementation_status === "implemented" ? (
@@ -2015,7 +2347,7 @@ export function EnginesScreen() {
                               {profile.engine_display_name ||
                                 manifest?.display_name ||
                                 profile.adapter_id}{" "}
-                              · {titleCase(profile.integration_mode)}
+                              · {profileConnectionLabel(profile)}
                             </p>
                           </div>
                           <div className="engine-actions">

@@ -3503,6 +3503,32 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.catalog-doc-link {
+  width: fit-content;
+  color: var(--color-primary-text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.adapter-config-fields {
+  display: grid;
+  gap: 13px;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.adapter-config-fields h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: var(--font-size-base);
+}
+
+.adapter-config-fields .helper-copy {
+  margin: 0;
+}
+
 .catalog-details {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);

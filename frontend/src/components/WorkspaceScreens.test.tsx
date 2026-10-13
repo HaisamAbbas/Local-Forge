@@ -280,6 +280,8 @@ describe("engine management", () => {
         ...catalogFixture,
         adapter_id: "localforge.tgi",
         display_name: "Hugging Face TGI serving endpoint",
+        category: "openai_compatible",
+        integration_modes: ["attached_endpoint"],
         maintenance_mode: true,
         recommended_for_new_managed_install: false,
         status_details: "Maintenance mode. Connect to an existing deployment.",
@@ -305,9 +307,14 @@ describe("engine management", () => {
     ).closest("article");
     expect(tgiCard).not.toBeNull();
     expect(within(tgiCard as HTMLElement).getByText("Maintenance mode")).toBeInTheDocument();
+    expect(within(tgiCard as HTMLElement).getByText("Fixture contract tested")).toBeInTheDocument();
     expect(
-      within(tgiCard as HTMLElement).getByText("3.3.7 (local API fixture)"),
+      within(tgiCard as HTMLElement).getByText("Local fixture: 3.3.7 (local API fixture)"),
     ).toBeInTheDocument();
+    expect(
+      within(tgiCard as HTMLElement).getByText("Attached endpoint (local or remote)"),
+    ).toBeInTheDocument();
+    expect(within(tgiCard as HTMLElement).getByText("Windows · Linux · macOS")).toBeInTheDocument();
 
     const tritonCard = screen
       .getByRole("heading", {
@@ -317,8 +324,190 @@ describe("engine management", () => {
     expect(tritonCard).not.toBeNull();
     expect(within(tritonCard as HTMLElement).getByText("Planned")).toBeInTheDocument();
     expect(
+      within(tritonCard as HTMLElement).getByText("No callable integration mode"),
+    ).toBeInTheDocument();
+    expect(
       within(tritonCard as HTMLElement).getByRole("button", { name: "Not available yet" }),
     ).toBeDisabled();
+  });
+
+  it("renders library-pipeline settings from the adapter manifest schema", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([
+      {
+        ...catalogFixture,
+        adapter_id: "localforge.openvino_genai",
+        display_name: "OpenVINO GenAI library pipeline",
+        category: "library_pipeline",
+        integration_modes: ["library_pipeline"],
+        config_schema: {
+          type: "object",
+          required: ["model_path"],
+          properties: {
+            model_path: {
+              type: "string",
+              format: "local-path",
+              title: "Existing local model path",
+              description: "Choose an existing model folder.",
+            },
+            python_executable: {
+              type: "string",
+              format: "local-executable-path",
+              title: "Python executable",
+            },
+            startup_timeout_seconds: {
+              type: "number",
+              minimum: 1,
+              maximum: 600,
+              default: 180,
+              title: "Worker startup timeout (seconds)",
+            },
+            request_timeout_seconds: {
+              type: "number",
+              minimum: 1,
+              maximum: 3600,
+              default: 300,
+              title: "Request timeout (seconds)",
+            },
+            device: { type: "string", default: "CPU", title: "Inference device" },
+          },
+        },
+      },
+    ]);
+
+    render(<EnginesScreen />);
+    const card = (
+      await screen.findByRole("heading", { name: "OpenVINO GenAI library pipeline" })
+    ).closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Add this adapter" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: "OpenVINO local model" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Existing local model path/ }), {
+      target: { value: "C:\\Models\\openvino-model" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Python executable/ }), {
+      target: { value: "C:\\venv\\Scripts\\python.exe" },
+    });
+    fireEvent.change(
+      within(dialog).getByRole("spinbutton", { name: /Worker startup timeout \(seconds\)/ }),
+      { target: { value: "45" } },
+    );
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Inference device/ }), {
+      target: { value: "GPU" },
+    });
+    expect(within(dialog).queryByRole("textbox", { name: /Endpoint URL/ })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+
+    expect(createEngineProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapter_id: "localforge.openvino_genai",
+        integration_mode: "library_pipeline",
+        endpoint_url: null,
+        engine_extensions: {
+          openvino_genai: {
+            model_path: "C:\\Models\\openvino-model",
+            python_executable: "C:\\venv\\Scripts\\python.exe",
+            startup_timeout_seconds: 45,
+            request_timeout_seconds: 300,
+            device: "GPU",
+          },
+        },
+      }),
+    );
+  });
+
+  it("renders arbitrary attached-adapter extension fields without an engine-specific form", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([
+      {
+        ...catalogFixture,
+        adapter_id: "localforge.fixture_serving",
+        display_name: "Fixture serving connector",
+        category: "openai_compatible",
+        integration_modes: ["attached_endpoint"],
+        config_schema: {
+          type: "object",
+          properties: {
+            endpoint_url: { type: "string", format: "uri" },
+            engine_extensions: {
+              type: "object",
+              properties: {
+                fixture_serving: {
+                  type: "object",
+                  required: ["streaming_mode"],
+                  properties: {
+                    streaming_mode: {
+                      enum: ["auto", "disabled"],
+                      title: "Streaming mode",
+                    },
+                    metrics_enabled: {
+                      type: "boolean",
+                      default: false,
+                      title: "Read native metrics",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    render(<EnginesScreen />);
+    const card = (
+      await screen.findByRole("heading", { name: "Fixture serving connector" })
+    ).closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Add this adapter" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: "Schema driven endpoint" },
+    });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Endpoint URL/ }), {
+      target: { value: "http://127.0.0.1:9001" },
+    });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Streaming mode" }), {
+      target: { value: "disabled" },
+    });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Read native metrics" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+
+    expect(createEngineProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapter_id: "localforge.fixture_serving",
+        endpoint_url: "http://127.0.0.1:9001",
+        engine_extensions: {
+          fixture_serving: { streaming_mode: "disabled", metrics_enabled: true },
+        },
+      }),
+    );
+  });
+
+  it("labels attached profile endpoints as local or remote", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([openAiCompatibleFixture]);
+    vi.mocked(listEngineProfiles).mockResolvedValue([
+      engineFixture({
+        id: "local-profile",
+        label: "Local endpoint profile",
+        adapter_id: "localforge.openai_compatible",
+        endpoint_url: "http://127.0.0.1:9000/v1",
+      }),
+      engineFixture({
+        id: "remote-profile",
+        label: "Remote endpoint profile",
+        adapter_id: "localforge.openai_compatible",
+        endpoint_url: "https://models.example.test/v1",
+        is_remote: true,
+      }),
+    ]);
+
+    render(<EnginesScreen />);
+
+    expect(await screen.findByText(/Local endpoint$/)).toBeInTheDocument();
+    expect(screen.getByText(/Remote endpoint$/)).toBeInTheDocument();
   });
 
   it("stores LocalAI model selection for backend fingerprint discovery", async () => {
