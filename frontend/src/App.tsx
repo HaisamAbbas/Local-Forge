@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
 import { ExperimentsScreen } from "./components/ExperimentsScreen";
+import { PlaygroundScreen } from "./components/PlaygroundScreen";
 import { RunsScreen } from "./components/RunsScreen";
 import { WorkloadsScreen } from "./components/WorkloadsScreen";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./components/WorkspaceScreens";
@@ -16,6 +17,11 @@ const navigation = [
     id: "engines",
     label: "Engines",
     description: "Connect runtimes and inspect what each server supports.",
+  },
+  {
+    id: "playground",
+    label: "Playground",
+    description: "Send a prompt to an enabled model and watch its response arrive in real time.",
   },
   {
     id: "system",
@@ -131,6 +137,8 @@ export function App() {
             <OverviewScreen />
           ) : activeScreen === "engines" ? (
             <EnginesScreen />
+          ) : activeScreen === "playground" ? (
+            <PlaygroundScreen />
           ) : activeScreen === "system" ? (
             <SystemScreen />
           ) : activeScreen === "workloads" ? (
