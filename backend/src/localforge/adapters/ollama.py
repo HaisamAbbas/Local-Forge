@@ -20,6 +20,7 @@ from localforge.adapters.contracts import (
     AdapterManifest,
     AdapterMetric,
     AdapterModel,
+    AdapterPlatform,
     AdapterProcessHandle,
     AdapterStreamEvent,
     ConfigValidationResult,
@@ -232,6 +233,8 @@ class OllamaEngineAdapter:
             ),
             category=AdapterCategory.NATIVE_API,
             integration_modes=[EngineIntegrationMode.ATTACHED_ENDPOINT],
+            operating_systems=list(AdapterPlatform),
+            version_tested=["0.12.0 (local API fixture)"],
             declared_capabilities={
                 "attach_only",
                 "health",

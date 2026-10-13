@@ -310,6 +310,7 @@ class LlamaCppEngineAdapter:
                 EngineIntegrationMode.ATTACHED_ENDPOINT,
                 EngineIntegrationMode.MANAGED_PROCESS,
             ],
+            version_tested=[f"{LLAMA_CPP_TESTED_VERSION} (local API fixture)"],
             operating_systems=[
                 AdapterPlatform.WINDOWS,
                 AdapterPlatform.LINUX,

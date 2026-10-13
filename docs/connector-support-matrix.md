@@ -2,30 +2,49 @@
 
 **Reviewed:** 13 October 2026
 
-Serving connectors attach to an endpoint the user has already started. Library-pipeline connectors
-run an already-installed inference package against an existing local model in an isolated process.
-LOCALFORGE does not install engines/dependencies, compile or download models, start serving
-endpoints, or choose an accelerator. The OS list in the catalog describes where the LOCALFORGE
-client can run; an attached server can run on another host. Fixture version values below are
-synthetic and do not claim live binary compatibility. Library package versions appear only when a
-local runtime probe reads the installed package metadata.
+Serving connectors attach to an endpoint the user has already started. Library-pipeline connectors run
+an already-installed inference package against an existing local model in an isolated process.
+LOCALFORGE does not install engines or dependencies, compile or download models, start serving
+endpoints except for the explicitly marked llama.cpp managed mode, or choose an accelerator. The
+host OS column describes the machine running LOCALFORGE; an attached server can run on another
+machine. `version_tested` values marked as local fixtures are synthetic test responses, not
+upstream release or binary validation. No live upstream release validation is claimed by this
+matrix. Library package versions are learned only when a local runtime probe reads installed
+package metadata.
 
-| Connector | Status and integration | LOCALFORGE host OS | Fixture version | Version, model, and metric behavior |
-|---|---|---|---|---|
-| TensorRT-LLM `trtllm-serve` | Implemented; attach-only OpenAI Chat Completions | Windows, Linux, macOS | `1.3` | Reads `/version`, `/health`, and `trtllm_*` Prometheus samples. |
-| NVIDIA Triton + TensorRT-LLM backend | Planned; not callable | Linux | Not recorded | Triton uses model-specific `/v2/models/{name}/generate` routes. LOCALFORGE has no verified chat adapter for this API and does not report a working connector. Triton and backend versions remain unknown. |
-| LMDeploy | Implemented; attach-only OpenAI-compatible API server | Windows, Linux, macOS | `0.18.0` | Version remains unknown unless a safe version route is explicitly configured. Reads `lmdeploy:*` Prometheus samples when exposed. |
-| LightLLM | Implemented; attach-only OpenAI Chat Completions | Windows, Linux, macOS | `1.2.0` | Uses the documented chat route and health check. It does not claim version discovery or native metrics because no stable route is documented by the connector. |
-| Hugging Face TGI | Implemented; attach-only OpenAI Messages API | Windows, Linux, macOS | `3.3.7` | Reads `/info`, `/health`, and `tgi_*` Prometheus samples. Catalog and UI label it maintenance mode; it is not recommended for a new managed installation. |
-| LocalAI | Implemented; attach-only OpenAI-compatible API | Windows, Linux, macOS | `4.11.0` | Reads `/version` and `api_call*` metrics when authorized and enabled. A backend is stored as a separate layer only when the selected model configuration explicitly reports it. |
-| KoboldCpp | Implemented; attach-only OpenAI Chat Completions | Windows, Linux, macOS | `1.122.1` | Reads `/api/extra/version`. It identifies KoboldCpp as the server and leaves the lower-level inference runtime unknown. Its JSON performance route is not misrepresented as Prometheus metrics. |
-| MLX-LM | Implemented; attach-only OpenAI-compatible server | Windows, Linux, macOS | Not recorded | LOCALFORGE can attach from any supported desktop host; the target server must already run on Apple silicon macOS. Uses the official chat and model routes. It does not claim health, version, or native metrics. The model must already be local to that server. |
-| MLC LLM | Implemented; attach-only REST server | Windows, Linux, macOS | Not recorded | Uses the documented Chat Completions and model routes. The MLC model library must already be compiled and served. The connector does not claim health, version, or native metrics. |
-| OpenVINO GenAI | Implemented; isolated library pipeline | Windows, Linux, macOS | Fixture IPC only | Runs a local OpenVINO GenAI pipeline in a child process. Uses a preconverted OpenVINO model or supported local GGUF input and a configured device such as CPU. The runtime package versions are recorded after a successful local probe; no upstream binary is installed or live-tested in CI. |
-| ONNX Runtime GenAI | Implemented; isolated library pipeline | Windows, Linux, macOS | Fixture IPC only | Runs the ONNX Runtime GenAI Python library in a child process using an existing local model directory. The installed package/provider combination determines CPU or accelerator support. Its Python API is documented as preview and can change. The model-reported device and package versions are fingerprinted after a successful local probe. |
-| mistral.rs | Implemented; attach-only OpenAI-compatible server | Windows, Linux, macOS | Not recorded | Reads `/health` and only the `mistralrs_*` Prometheus family. Does not claim a server version route, bearer authentication, or normalization of the server's `http_*` metrics. Bind locally or place an authenticating reverse proxy in front of the endpoint. |
-| NVIDIA Dynamo | Implemented; attached composed serving stack | Windows, Linux, macOS | Not recorded | Uses the OpenAI-compatible frontend and reads only its `dynamo_frontend_*` metrics. Router worker IDs and reported state become fingerprint layers only when emitted by verified frontend inventory metrics; discovered workers are not necessarily available for routing. Worker/component and backend metrics are not collected. Aggregate and per-worker samples retain distinct names and labels; no sums are inferred. |
-| ExLlamaV3 | Planned; isolated library pipeline | Windows, Linux | Not recorded | CUDA-oriented Python inference library with PyTorch/CUDA requirements and local quantized model formats. It has no project-owned OpenAI-compatible server; TabbyAPI is a separate project. LOCALFORGE does not claim a callable ExLlamaV3 adapter. |
+Modes and statuses use the exact manifest values so the automated catalog test can compare this
+table with the API catalog. An empty mode means the entry is not callable. `localforge.fake` is a
+test fixture outside the intended user-facing ecosystem, but is included to keep the complete API
+catalog accounted for.
+
+| Adapter ID | Connector | Implementation status | Integration modes | LOCALFORGE host OS | `version_tested` | Documentation | Scope and limits |
+|---|---|---|---|---|---|---|---|
+| `localforge.exllamav3` | ExLlamaV3 library pipeline | planned | none | windows, linux | none | [Docs](https://github.com/turboderp-org/exllamav3) | CUDA-oriented library; no callable LOCALFORGE pipeline. PyTorch, CUDA, compatible GPU, and local quantized model are prerequisites. TabbyAPI is a separate project. |
+| `localforge.fake` | Deterministic Fake Engine (test fixture) | implemented | attached_endpoint, managed_process | windows, linux, macos | none | none | Deterministic test adapter only. It does not load a language model and its timings are not inference measurements. |
+| `localforge.koboldcpp` | KoboldCpp serving endpoint | implemented | attached_endpoint | windows, linux, macos | `1.122.1 (local API fixture)` | [Docs](https://github.com/LostRuins/koboldcpp/wiki) | Attach-only Chat Completions. Reports KoboldCpp identity; does not infer its lower-level runtime or claim native metrics. |
+| `localforge.lightllm` | LightLLM serving endpoint | implemented | attached_endpoint | windows, linux, macos | `1.2.0 (local API fixture)` | [Docs](https://github.com/ModelTC/LightLLM) | Attach-only Chat Completions. Fixture compatibility only; server version and native metrics remain unclaimed. |
+| `localforge.llama_cpp` | llama.cpp / llama-server | implemented | attached_endpoint, managed_process | windows, linux, macos | `b11580 (local API fixture)` | [Docs](https://github.com/ggml-org/llama.cpp/blob/4413a192410fad1f054e9216114087a3e01527a0/tools/server/README.md) | Attach to an existing server or launch an explicitly selected local binary and existing GGUF file. Managed mode is loopback-only; GPU support depends on the selected build. |
+| `localforge.lmdeploy` | LMDeploy serving endpoint | implemented | attached_endpoint | windows, linux, macos | `0.18.0 (local API fixture)` | [Docs](https://lmdeploy.readthedocs.io/en/latest/llm/api_server.html) | Attach-only OpenAI-compatible server. Version remains unknown unless a safe version route is configured; native samples stay engine-native. |
+| `localforge.localai` | LocalAI serving endpoint | implemented | attached_endpoint | windows, linux, macos | `4.11.0 (local API fixture)` | [Docs](https://localai.io/) | Attach-only OpenAI-compatible server. A backend fingerprint layer is saved only when validated model configuration explicitly reports it. |
+| `localforge.mistral_rs` | mistral.rs serving endpoint | implemented | attached_endpoint | windows, linux, macos | none | [Docs](https://ericlbuehler.github.io/mistral.rs/guides/serve/openai-compatible-apis/) | Attach-only server. Collects only the `mistralrs_*` metric family; does not claim server version or bearer-auth validation. |
+| `localforge.mlc_llm` | MLC LLM serving endpoint | implemented | attached_endpoint | windows, linux, macos | none | [Docs](https://llm.mlc.ai/docs/deploy/rest.html) | Attach-only REST server. The compiled model library must already be installed and served; no health, version, or native metrics claims. |
+| `localforge.mlx_lm` | MLX-LM serving endpoint | implemented | attached_endpoint | windows, linux, macos | none | [Docs](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/server.py) | Attach-only server; target must already run on Apple silicon macOS. LOCALFORGE host may use any supported OS. |
+| `localforge.nvidia_dynamo` | NVIDIA Dynamo frontend and serving stack | implemented | composed_serving_stack | windows, linux, macos | none | [Docs](https://docs.nvidia.com/dynamo/dev/knowledge-base/modular-components/frontend/overview) | Attach to a composed serving stack. Reads frontend metrics only; verified workers remain separate layers and aggregate/per-worker series are never summed. |
+| `localforge.ollama` | Ollama | implemented | attached_endpoint | windows, linux, macos | `0.12.0 (local API fixture)` | [Docs](https://docs.ollama.com/api) | Attach to an existing local service. Does not pull/delete models or start/stop Ollama; remote-backed inventory is excluded. |
+| `localforge.onnxruntime_genai` | ONNX Runtime GenAI library pipeline | implemented | library_pipeline | windows, linux, macos | none | [Docs](https://onnxruntime.ai/docs/genai/) | Runs installed Python package in an isolated child using an existing local model directory. Provider support depends on installed package and model configuration. |
+| `localforge.openai_compatible` | Custom OpenAI-compatible endpoint | implemented | attached_endpoint | windows, linux, macos | none | [Docs](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) | Generic attached chat endpoint for local or explicitly confirmed remote use. Does not infer vendor, engine version, or vendor metrics. |
+| `localforge.openvino_genai` | OpenVINO GenAI library pipeline | implemented | library_pipeline | windows, linux, macos | none | [Docs](https://docs.openvino.ai/2026/openvino-workflow-generative/inference-with-genai.html) | Runs installed OpenVINO GenAI in an isolated child using an existing supported local model. Device and package versions are reported only after a successful local probe. |
+| `localforge.sglang` | SGLang serving endpoint | implemented | attached_endpoint | windows, linux, macos | `0.4.9 (local API fixture)` | [Docs](https://docs.sglang.ai/basic_usage/openai_api.html) | Attach-only OpenAI-compatible endpoint. Version stays unknown by default; optional metrics preserve engine-native definitions. |
+| `localforge.tensorrt_llm` | TensorRT-LLM `trtllm-serve` | implemented | attached_endpoint | windows, linux, macos | `1.3 (local API fixture)` | [Docs](https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve/trtllm-serve.html) | Attach-only Chat Completions endpoint. No managed launcher, engine install, or model download. |
+| `localforge.tgi` | Hugging Face TGI serving endpoint | implemented | attached_endpoint | windows, linux, macos | `3.3.7 (local API fixture)` | [Docs](https://huggingface.co/docs/text-generation-inference/en/index) | Attach-only and marked maintenance mode; useful for existing deployments, not recommended for new managed installs. |
+| `localforge.triton_tensorrt_llm` | NVIDIA Triton + TensorRT-LLM backend | planned | none | linux | none | [Docs](https://github.com/triton-inference-server/tensorrtllm_backend) | Not callable. Its model-specific generation route is not a verified Chat Completions integration; Triton/backend identity and versions remain unknown. |
+| `localforge.vllm` | vLLM serving endpoint | implemented | attached_endpoint | windows, linux, macos | `0.10.2 (local API fixture)` | [Docs](https://docs.vllm.ai/en/stable/serving/online_serving/) | Attach-only OpenAI-compatible server. No engine install, managed process, or model download. |
+
+The generic profile form renders supported adapter settings from each manifest's configuration
+schema. Local library profiles use that same form for a model path, optional Python executable,
+timeouts, and a runtime device where applicable. The settings are stored in the adapter's own
+extension namespace and passed to the isolated library worker; they are not benchmark-storage
+columns.
 
 ### Prompt 15C runtime limits
 

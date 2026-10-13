@@ -1,6 +1,8 @@
 """Manifest, catalog, asynchronous contract, and fake stream tests."""
 
 import asyncio
+import re
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -73,6 +75,8 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     )
     ollama = next(item for item in manifests if item.adapter_id == "localforge.ollama")
     assert ollama.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
+    assert ollama.operating_systems
+    assert ollama.version_tested == ["0.12.0 (local API fixture)"]
     assert "server_reported_durations" in ollama.declared_capabilities
     assert not ollama.declared_capabilities.intersection({"managed_process", "cancellation"})
     vllm = next(item for item in manifests if item.adapter_id == "localforge.vllm")
@@ -80,6 +84,8 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     assert vllm.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert sglang.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert vllm.adapter_id != sglang.adapter_id
+    assert llama_cpp.version_tested == ["b11580 (local API fixture)"]
+    assert compatible.operating_systems
     triton = next(item for item in manifests if item.adapter_id == "localforge.triton_tensorrt_llm")
     assert triton.implementation_status == "planned"
     assert triton.integration_modes == []
@@ -103,6 +109,64 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
         )
     with pytest.raises(ValidationError, match="adapter_version"):
         AdapterManifest.model_validate({**manifest.model_dump(), "adapter_version": "v1"})
+
+
+def test_complete_adapter_catalog_matches_support_matrix() -> None:
+    intended_adapter_ids = {
+        "localforge.llama_cpp",
+        "localforge.ollama",
+        "localforge.vllm",
+        "localforge.sglang",
+        "localforge.tensorrt_llm",
+        "localforge.triton_tensorrt_llm",
+        "localforge.nvidia_dynamo",
+        "localforge.lmdeploy",
+        "localforge.lightllm",
+        "localforge.tgi",
+        "localforge.mlx_lm",
+        "localforge.mlc_llm",
+        "localforge.openvino_genai",
+        "localforge.onnxruntime_genai",
+        "localforge.mistral_rs",
+        "localforge.exllamav3",
+        "localforge.localai",
+        "localforge.koboldcpp",
+        "localforge.openai_compatible",
+    }
+    catalog = default_adapter_catalog()
+    manifests = {item.adapter_id: item for item in catalog.list_manifests()}
+    matrix_path = Path(__file__).resolve().parents[2] / "docs" / "connector-support-matrix.md"
+    matrix_rows: dict[str, list[str]] = {}
+    for line in matrix_path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("| `localforge."):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        assert len(cells) == 8, f"Malformed support-matrix row: {line}"
+        adapter_id = cells[0].strip("`")
+        assert adapter_id not in matrix_rows, f"Duplicate support-matrix row: {adapter_id}"
+        matrix_rows[adapter_id] = cells
+
+    expected_ids = intended_adapter_ids | {FAKE_ADAPTER_ID}
+    assert set(manifests) == expected_ids
+    assert set(matrix_rows) == expected_ids
+
+    for adapter_id, manifest in manifests.items():
+        _, _, status, modes, platforms, versions, docs, _ = matrix_rows[adapter_id]
+        assert status == manifest.implementation_status
+        assert (modes.split(", ") if modes != "none" else []) == [
+            mode.value for mode in manifest.integration_modes
+        ]
+        assert (platforms.split(", ") if platforms != "none" else []) == [
+            platform.value for platform in manifest.operating_systems
+        ]
+        versions = versions.strip("`")
+        assert (versions.split("; ") if versions != "none" else []) == manifest.version_tested
+        if manifest.documentation_url is None:
+            assert docs == "none"
+        else:
+            match = re.fullmatch(r"\[Docs\]\((.+)\)", docs)
+            assert match is not None
+            assert match.group(1) == manifest.documentation_url
 
 
 def test_missing_and_old_protocol_adapters_fail_with_readable_diagnostics() -> None:

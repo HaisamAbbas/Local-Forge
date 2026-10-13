@@ -6,9 +6,11 @@ Requests go from that machine to the selected inference engine. Remote endpoint 
 explicit confirmation through the local API; remote inference requests use the configured endpoint.
 
 The local UI, API, SQLite persistence, machine and engine profiles, workload builder, benchmark
-runner, and run history are implemented. The adapter catalog includes a deterministic fake engine,
-a generic attached OpenAI-compatible chat-completions adapter, llama.cpp, Ollama, and attach-only
-vLLM and SGLang connectors. The fake engine does not load a model and its timings are not
+runner, and run history are implemented. The adapter catalog covers llama.cpp, Ollama, vLLM,
+SGLang, TensorRT-LLM, LMDeploy, LightLLM, TGI, LocalAI, KoboldCpp, MLX-LM, MLC LLM, mistral.rs,
+OpenVINO GenAI, ONNX Runtime GenAI, NVIDIA Dynamo, and a generic OpenAI-compatible endpoint. Triton
+with TensorRT-LLM and ExLlamaV3 are cataloged as planned and unavailable. The deterministic fake
+engine is for workflow tests only: it does not load a model and its timings are not
 model-performance measurements. Real endpoint requests are sent by the evaluator machine's local
 API to the configured endpoint. Ordinary checks do not download models or contact public endpoints.
 
@@ -143,8 +145,10 @@ live-tested against an installed serving engine or GPU; default checks use local
 Prompt 15B adds attach-only TensorRT-LLM, LMDeploy, LightLLM, TGI, LocalAI, and KoboldCpp
 connectors. NVIDIA Triton with the TensorRT-LLM backend remains planned because its documented
 model-specific API is not the chat API currently supported by the adapter boundary. See the
-[connector support matrix](docs/connector-support-matrix.md) for version fixture coverage, platform
-notes, maintenance status, and stack fingerprint behavior.
+[connector support matrix](docs/connector-support-matrix.md) for every catalog entry, connection
+modes, host OS declarations, test evidence, maintenance status, and known limits. Adapter
+implementors should use the [adapter authoring guide](docs/adapter-authoring.md) for manifest,
+capability, fixture, version evidence, privacy, and release requirements.
 
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:

@@ -23,6 +23,7 @@ from localforge.adapters.contracts import (
     AdapterDiagnostic,
     AdapterManifest,
     AdapterModel,
+    AdapterPlatform,
     AdapterProcessHandle,
     AdapterStreamEvent,
     ConfigValidationResult,
@@ -367,6 +368,7 @@ class OpenAICompatibleEngineAdapter:
             ),
             category=AdapterCategory.OPENAI_COMPATIBLE,
             integration_modes=[EngineIntegrationMode.ATTACHED_ENDPOINT],
+            operating_systems=list(AdapterPlatform),
             declared_capabilities={
                 "chat_completion",
                 "streaming",
