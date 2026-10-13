@@ -3,6 +3,7 @@
 import asyncio
 import re
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -17,7 +18,9 @@ from localforge.adapters.catalog import (
 from localforge.adapters.contracts import (
     AdapterConfiguration,
     AdapterManifest,
+    AdapterStreamEvent,
     GenerationRequest,
+    PreparedRequest,
     StreamEventType,
 )
 from localforge.adapters.fake import (
@@ -443,6 +446,57 @@ def test_catalog_rejects_modes_the_adapter_does_not_support() -> None:
         asyncio.run(catalog.validate_config(FAKE_ADAPTER_ID, config))
 
 
+def test_catalog_rejects_prepared_requests_that_change_identity() -> None:
+    class MisidentifiedAdapter(FakeEngineAdapter):
+        async def prepare_request(
+            self, config: AdapterConfiguration, request: GenerationRequest
+        ) -> PreparedRequest:
+            prepared = await super().prepare_request(config, request)
+            return prepared.model_copy(update={"request_id": uuid4()})
+
+    catalog = AdapterCatalog()
+    catalog.register(MisidentifiedAdapter())
+
+    async def run() -> None:
+        models = await catalog.list_models(FAKE_ADAPTER_ID, _attached_config())
+        with pytest.raises(AdapterCapabilityClaimError, match="preserve the generation request"):
+            await catalog.prepare_request(
+                FAKE_ADAPTER_ID,
+                _attached_config(),
+                GenerationRequest(model_ref=models[0].model_ref, prompt="identity check"),
+            )
+        await catalog.close()
+
+    asyncio.run(run())
+
+
+def test_catalog_rejects_stream_events_for_a_different_request() -> None:
+    class MisidentifiedEventAdapter(FakeEngineAdapter):
+        def stream_request(self, request: PreparedRequest):
+            async def events():
+                async for event in super(MisidentifiedEventAdapter, self).stream_request(request):
+                    yield event.model_copy(update={"request_id": uuid4()})
+
+            return events()
+
+    catalog = AdapterCatalog()
+    catalog.register(MisidentifiedEventAdapter())
+
+    async def run() -> None:
+        models = await catalog.list_models(FAKE_ADAPTER_ID, _attached_config())
+        prepared = await catalog.prepare_request(
+            FAKE_ADAPTER_ID,
+            _attached_config(),
+            GenerationRequest(model_ref=models[0].model_ref, prompt="event identity check"),
+        )
+        with pytest.raises(AdapterCapabilityClaimError, match="different request"):
+            async for _event in catalog.stream_request(FAKE_ADAPTER_ID, prepared):
+                pass
+        await catalog.close()
+
+    asyncio.run(run())
+
+
 def test_fake_config_validation_returns_readable_field_diagnostics() -> None:
     catalog = default_adapter_catalog()
     invalid = AdapterConfiguration(
@@ -474,6 +528,33 @@ def test_runner_close_cancels_a_blocked_async_call() -> None:
         await runner.close()
         with pytest.raises(asyncio.CancelledError):
             await call_task
+
+    asyncio.run(run())
+
+
+def test_stream_runner_bounds_queue_and_cleans_blocked_producer() -> None:
+    runner = AdapterCallRunner()
+    event = AdapterStreamEvent(
+        request_id=uuid4(),
+        sequence=0,
+        event_type=StreamEventType.OUTPUT_CHUNK,
+        text="chunk",
+    )
+    produced = 0
+
+    async def fast_stream():
+        nonlocal produced
+        while True:
+            produced += 1
+            yield event.model_copy(update={"sequence": produced - 1})
+
+    async def run() -> None:
+        stream = runner.stream(fast_stream)
+        first = await anext(stream)
+        assert first.sequence == 0
+        await stream.aclose()
+        assert produced <= 34
+        assert not runner._tasks
 
     asyncio.run(run())
 

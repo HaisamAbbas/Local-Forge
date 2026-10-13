@@ -151,7 +151,12 @@ class AdapterCatalog:
         request: GenerationRequest,
     ) -> PreparedRequest:
         self._validate_mode(adapter_id, config)
-        return await self._runner.invoke(self.get(adapter_id).prepare_request, config, request)
+        prepared = await self._runner.invoke(self.get(adapter_id).prepare_request, config, request)
+        if prepared.request_id != request.request_id:
+            raise AdapterCapabilityClaimError(
+                f"Adapter '{adapter_id}' did not preserve the generation request identity."
+            )
+        return prepared
 
     def stream_request(
         self, adapter_id: str, request: PreparedRequest
@@ -161,6 +166,10 @@ class AdapterCatalog:
 
         async def validate_events() -> AsyncIterator[AdapterStreamEvent]:
             async for event in stream:
+                if event.request_id != request.request_id:
+                    raise AdapterCapabilityClaimError(
+                        f"Adapter '{adapter_id}' returned an event for a different request."
+                    )
                 if event.native_metrics:
                     metric_capabilities = {"native_metrics", "server_reported_durations"}
                     if not manifest.declared_capabilities.intersection(metric_capabilities):

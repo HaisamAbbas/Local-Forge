@@ -1168,6 +1168,7 @@ class OpenAICompatibleEngineAdapter:
         ):
             raise ValueError("The endpoint request extensions override a reserved field.")
         prepared = PreparedRequest(
+            request_id=request.request_id,
             model_ref=request.model_ref,
             prompt=request.prompt,
             transport="openai_chat_completions",

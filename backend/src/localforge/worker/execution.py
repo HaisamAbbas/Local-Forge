@@ -449,11 +449,14 @@ async def _execute_request(
         nonlocal chunk_index, output_characters, inter_event_latency_ms
         nonlocal input_tokens, output_tokens, usage_exact, observed_terminal, failed_category
         request = GenerationRequest(
+            request_id=request_id,
             model_ref=model_ref,
             prompt=prompt,
             parameters=parameters,
         )
         prepared = await catalog.prepare_request(adapter_id, config, request)
+        if cancellation_requested.is_set():
+            return
         async for event in catalog.stream_request(adapter_id, prepared):
             if event.event_type in {StreamEventType.FIRST_OUTPUT, StreamEventType.OUTPUT_CHUNK}:
                 chunk = event.text or ""
@@ -595,7 +598,9 @@ async def _execute_request(
         )
         if stream_task in done:
             await stream_task
-            if observed_terminal is StreamEventType.COMPLETED:
+            if cancellation_requested.is_set():
+                outcome = RequestOutcome.CANCELLED
+            elif observed_terminal is StreamEventType.COMPLETED:
                 outcome = RequestOutcome.SUCCEEDED
             elif observed_terminal is StreamEventType.DISCONNECTED:
                 outcome = RequestOutcome.DISCONNECTED

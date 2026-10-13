@@ -151,6 +151,7 @@ class ProbeResult(SchemaModel):
 class GenerationRequest(SchemaModel):
     """Ephemeral prompt input. The prompt is never logged by the adapter contract."""
 
+    request_id: UUID = Field(default_factory=uuid4)
     model_ref: str = Field(min_length=1, max_length=500)
     prompt: str
     parameters: dict[str, JsonValue] = Field(default_factory=dict)

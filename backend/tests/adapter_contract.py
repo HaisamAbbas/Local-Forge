@@ -30,12 +30,15 @@ async def assert_registered_adapter_contract(
 
     models = await catalog.list_models(adapter_id, config)
     assert models
+    generation = GenerationRequest(model_ref=models[0].model_ref, prompt="contract check")
     request = await catalog.prepare_request(
         adapter_id,
         config,
-        GenerationRequest(model_ref=models[0].model_ref, prompt="contract check"),
+        generation,
     )
+    assert request.request_id == generation.request_id
     events = [event async for event in catalog.stream_request(adapter_id, request)]
+    assert all(event.request_id == request.request_id for event in events)
     assert events[0].event_type is StreamEventType.FIRST_OUTPUT
     assert events[-1].event_type is StreamEventType.COMPLETED
 

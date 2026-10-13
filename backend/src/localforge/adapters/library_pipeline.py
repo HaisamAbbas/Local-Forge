@@ -392,6 +392,7 @@ class IsolatedLibraryPipelineAdapter:
         key = _session_key(path, device, python)
         await self._ensure_worker(config, startup_timeout)
         return PreparedRequest(
+            request_id=request.request_id,
             model_ref=request.model_ref,
             prompt=request.prompt,
             transport="bounded_json_lines_ipc",

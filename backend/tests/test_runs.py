@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -11,7 +12,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from localforge.adapters.catalog import AdapterCatalog
-from localforge.adapters.contracts import AdapterConfiguration, AdapterMetric, StreamEventType
+from localforge.adapters.contracts import (
+    AbortResult,
+    AdapterConfiguration,
+    AdapterMetric,
+    AdapterStreamEvent,
+    GenerationRequest,
+    PreparedRequest,
+    StreamEventType,
+)
 from localforge.adapters.fake import FakeEngineAdapter, FakeEngineScenario, FakeStreamFailure
 from localforge.api import runs as run_api
 from localforge.api.main import AppSettings, create_app
@@ -57,6 +66,8 @@ from localforge.storage.repositories import (
     RequestSampleRepository,
 )
 from localforge.worker.execution import (
+    AdapterDrainTimeoutError,
+    _execute_request,
     _localai_fingerprint_config,
     _sanitize_runtime_fingerprint_snapshot,
     execute_run,
@@ -213,6 +224,96 @@ def test_worker_interruption_recovers_partial_output_without_inventing_duration(
     assert recovered.output_characters == 10
     assert recovered.partial_output_observed is True
     assert len(recovered.inter_event_latency_ms) == 1
+
+
+def test_request_cancellation_has_a_bounded_drain_timeout(connection, monkeypatch) -> None:
+    from localforge.worker import execution as worker_execution
+
+    run = _new_queued_run(connection)
+    monkeypatch.setattr(worker_execution, "CANCEL_DRAIN_SECONDS", 0.01)
+
+    class UnresponsiveCatalog:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+            self.finished = asyncio.Event()
+            self.aborted_request_id: UUID | None = None
+
+        async def prepare_request(
+            self,
+            _adapter_id: str,
+            _config: AdapterConfiguration,
+            request: GenerationRequest,
+        ) -> PreparedRequest:
+            return PreparedRequest(
+                request_id=request.request_id,
+                model_ref=request.model_ref,
+                prompt=request.prompt,
+                transport="fixture",
+            )
+
+        async def stream_request(self, _adapter_id: str, _prepared: PreparedRequest):
+            self.started.set()
+            try:
+                await self.release.wait()
+                yield AdapterStreamEvent(
+                    request_id=_prepared.request_id,
+                    sequence=0,
+                    event_type=StreamEventType.COMPLETED,
+                )
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                await self.release.wait()
+            finally:
+                self.finished.set()
+
+        async def abort_request(self, _adapter_id: str, _request_id: UUID) -> AbortResult:
+            self.aborted_request_id = _request_id
+            return AbortResult(supported=True, accepted=True)
+
+    catalog = UnresponsiveCatalog()
+    cancellation_requested = asyncio.Event()
+    counts: Counter[str] = Counter()
+
+    async def run_request() -> None:
+        request_task = asyncio.create_task(
+            _execute_request(
+                connection=connection,
+                catalog=catalog,  # type: ignore[arg-type]
+                adapter_id="fixture.unresponsive",
+                config=AdapterConfiguration(
+                    integration_mode=EngineIntegrationMode.ATTACHED_ENDPOINT
+                ),
+                model_ref="fixture-model",
+                prompt="private prompt",
+                parameters={},
+                run_id=run.id,
+                request_index=0,
+                phase="measurement",
+                run_monotonic_origin_ns=time.monotonic_ns(),
+                engine_version=None,
+                timeout_seconds=1,
+                cancellation_requested=cancellation_requested,
+                counts=counts,
+                retain_content=False,
+            )
+        )
+        await catalog.started.wait()
+        cancellation_requested.set()
+        with pytest.raises(AdapterDrainTimeoutError):
+            await request_task
+        assert catalog.cancelled.is_set()
+        assert counts["cancelled"] == 1
+        samples = RequestSampleRepository(connection).list_for_run(run.id)
+        assert len(samples) == 1
+        assert samples[0].outcome is RequestOutcome.CANCELLED
+        assert samples[0].prompt_text is None
+        assert catalog.aborted_request_id == samples[0].request_id
+        catalog.release.set()
+        await asyncio.wait_for(catalog.finished.wait(), timeout=1)
+
+    asyncio.run(run_request())
 
 
 def test_stale_worker_lease_releases_resource_lock(connection) -> None:

@@ -390,6 +390,7 @@ class FakeEngineAdapter:
         if not validation.valid:
             raise ValueError(validation.diagnostics[0].message)
         return PreparedRequest(
+            request_id=request.request_id,
             model_ref=request.model_ref,
             prompt=request.prompt,
             transport="in_process_fake",

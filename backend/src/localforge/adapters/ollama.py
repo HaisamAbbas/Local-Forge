@@ -681,6 +681,7 @@ class OllamaEngineAdapter:
                 "select a local model."
             )
         prepared = PreparedRequest(
+            request_id=request.request_id,
             model_ref=request.model_ref,
             prompt=request.prompt,
             transport="ollama_chat",
