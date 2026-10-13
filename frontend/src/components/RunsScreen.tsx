@@ -33,6 +33,7 @@ import {
   summarizedMeanLatency,
   summarizedRequestThroughput,
 } from "../lib/run-state";
+import { groupWarnings } from "../lib/run-measurements";
 import { RunRequestCharts } from "./RunCharts";
 import { RunKeyResults, RunMeasurements } from "./RunMeasurements";
 import { RequestPointChart } from "./charts/RequestPointChart";
@@ -1042,20 +1043,36 @@ export function RunsScreen({
 
             <section className="run-subsection" aria-labelledby="run-warnings-title">
               <div className="section-title-row">
-                <h3 id="run-warnings-title">Warnings in latest events · {warnings.length}</h3>
+                <h3 id="run-warnings-title">
+                  Warnings in latest events · {warnings.length}
+                  {warnings.length > 0 ? ` (${groupWarnings(warnings).length} kinds)` : ""}
+                </h3>
               </div>
               {warnings.length === 0 ? (
                 <p className="empty-inline">No run warnings were recorded.</p>
               ) : (
                 <ul className="run-warning-list">
-                  {warnings.map((event) => (
-                    <li key={event.sequence_number}>
-                      <strong>{String(event.payload.code ?? "Warning")}</strong>
-                      <span>
-                        {String(
-                          event.payload.message ?? "Review this warning in the event timeline.",
-                        )}
-                      </span>
+                  {groupWarnings(warnings).map((group) => (
+                    <li key={group.code}>
+                      <strong>
+                        {group.code}
+                        {group.count > 1 ? ` · ${group.count}` : ""}
+                      </strong>
+                      <span>{group.explanation ?? group.messages[0]}</span>
+                      {(group.explanation !== null || group.messages.length > 1) && (
+                        <details className="run-warning-details">
+                          <summary>
+                            {group.messages.length === 1
+                              ? "Recorded message"
+                              : `${group.messages.length} recorded messages`}
+                          </summary>
+                          <ul>
+                            {group.messages.map((message) => (
+                              <li key={message}>{message}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
                     </li>
                   ))}
                 </ul>

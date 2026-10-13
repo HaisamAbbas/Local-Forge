@@ -6237,6 +6237,21 @@ table td {
   margin-top: var(--space-2);
 }
 
+.run-warning-details {
+  margin-top: 6px;
+  font-size: var(--font-size-xs);
+}
+
+.run-warning-details summary {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.run-warning-details ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
 @media (max-width: 1100px) {
   .key-results {
     grid-template-columns: repeat(3, minmax(0, 1fr));
