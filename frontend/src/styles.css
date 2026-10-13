@@ -5082,6 +5082,11 @@ table td {
   background-position: center 56%;
 }
 
+.page-heading--playground {
+  background-image: url("/images/localforge-inference-hero.jpg");
+  background-position: center 48%;
+}
+
 .main-content--experiments > .experiments-screen {
   width: min(1540px, 100%);
   margin: 0 auto;
