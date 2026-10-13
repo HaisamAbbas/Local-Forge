@@ -664,7 +664,8 @@ function EngineProfileDialog({
 }) {
   const isOpenAiCompatible = manifest.adapter_id === "localforge.openai_compatible";
   const isLlamaCpp = manifest.adapter_id === "localforge.llama_cpp";
-  const extensionNamespace = isLlamaCpp ? "llama_cpp" : "openai_compatible";
+  const isOllama = manifest.adapter_id === "localforge.ollama";
+  const extensionNamespace = isLlamaCpp ? "llama_cpp" : isOllama ? "ollama" : "openai_compatible";
   const savedExtension = initial?.engine_extensions?.[extensionNamespace] ?? {};
   const savedString = (key: string, fallback: string) => {
     const value = savedExtension[key];
@@ -703,7 +704,11 @@ function EngineProfileDialog({
           clear_credential: false,
           user_notes: initial.user_notes ?? "",
         }
-      : { ...blankEngineForm, integration_mode: manifest.integration_modes[0] ?? "" },
+      : {
+          ...blankEngineForm,
+          integration_mode: manifest.integration_modes[0] ?? "",
+          endpoint_url: isOllama ? "http://127.0.0.1:11434" : blankEngineForm.endpoint_url,
+        },
   );
   const [formError, setFormError] = useState("");
   const setField = <K extends keyof EngineFormValues>(key: K, value: EngineFormValues[K]) =>
@@ -840,6 +845,38 @@ function EngineProfileDialog({
         }
       }
     }
+    if (isOllama) {
+      const timeout = Number(values.timeout_seconds);
+      if (!values.endpoint_url.trim()) {
+        setFormError("Enter the local Ollama server URL.");
+        return;
+      }
+      if (!Number.isFinite(timeout) || timeout < 0.1 || timeout > 300) {
+        setFormError("Request timeout must be between 0.1 and 300 seconds.");
+        return;
+      }
+      try {
+        const endpoint = new URL(values.endpoint_url.trim());
+        const host = endpoint.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+        const isLocalHost =
+          host === "localhost" ||
+          host.endsWith(".localhost") ||
+          host === "::1" ||
+          /^127(?:\.\d{1,3}){3}$/.test(host);
+        if (
+          !isLocalHost ||
+          !["", "/"].includes(endpoint.pathname) ||
+          endpoint.search ||
+          endpoint.hash
+        ) {
+          setFormError("Ollama must use a local server URL at the root, such as 127.0.0.1:11434.");
+          return;
+        }
+      } catch {
+        setFormError("Enter a valid local Ollama server URL.");
+        return;
+      }
+    }
     setFormError("");
     const input: EngineProfileInput = {
       label: values.label.trim(),
@@ -849,9 +886,9 @@ function EngineProfileDialog({
       endpoint_url: values.endpoint_url.trim() || null,
       user_notes: values.user_notes.trim() || null,
     };
-    if (!isLlamaCpp && (!initial || values.health_route.trim()))
+    if (!isLlamaCpp && !isOllama && (!initial || values.health_route.trim()))
       input.health_route = values.health_route.trim() || null;
-    if (!isLlamaCpp && (!initial || values.models_route.trim()))
+    if (!isLlamaCpp && !isOllama && (!initial || values.models_route.trim()))
       input.models_route = values.models_route.trim() || null;
     if (isOpenAiCompatible) {
       const extension: Record<string, unknown> = { ...savedExtension };
@@ -899,6 +936,15 @@ function EngineProfileDialog({
       input.engine_extensions = {
         ...(initial?.engine_extensions ?? {}),
         llama_cpp: extension,
+      };
+    }
+    if (isOllama) {
+      input.engine_extensions = {
+        ...(initial?.engine_extensions ?? {}),
+        ollama: {
+          timeout_seconds: Number(values.timeout_seconds),
+          streaming_mode: values.streaming_mode,
+        },
       };
     }
     onSubmit(input);
@@ -961,12 +1007,16 @@ function EngineProfileDialog({
           <label>
             {isOpenAiCompatible
               ? "API base URL"
-              : isLlamaCpp && values.integration_mode === "managed_process"
-                ? "Local bind URL"
-                : isLlamaCpp
-                  ? "llama-server endpoint URL"
-                  : "Endpoint URL"}{" "}
-            {!isOpenAiCompatible && !isLlamaCpp && <span className="optional-label">Optional</span>}
+              : isOllama
+                ? "Ollama local server URL"
+                : isLlamaCpp && values.integration_mode === "managed_process"
+                  ? "Local bind URL"
+                  : isLlamaCpp
+                    ? "llama-server endpoint URL"
+                    : "Endpoint URL"}{" "}
+            {!isOpenAiCompatible && !isLlamaCpp && !isOllama && (
+              <span className="optional-label">Optional</span>
+            )}
             <input
               autoComplete="url"
               maxLength={1000}
@@ -974,11 +1024,13 @@ function EngineProfileDialog({
               placeholder={
                 isOpenAiCompatible
                   ? "http://127.0.0.1:8000/v1"
-                  : isLlamaCpp
-                    ? "http://127.0.0.1:9931"
-                    : "http://127.0.0.1:8000"
+                  : isOllama
+                    ? "http://127.0.0.1:11434"
+                    : isLlamaCpp
+                      ? "http://127.0.0.1:9931"
+                      : "http://127.0.0.1:8000"
               }
-              required={isOpenAiCompatible || isLlamaCpp}
+              required={isOpenAiCompatible || isLlamaCpp || isOllama}
               type="url"
               value={values.endpoint_url}
             />
@@ -1110,6 +1162,43 @@ function EngineProfileDialog({
               )}
             </>
           )}
+          {isOllama && (
+            <>
+              <p className="notice">
+                LOCALFORGE attaches to Ollama already running on this machine. Select a model
+                already installed in Ollama; LOCALFORGE never pulls or deletes models and never
+                starts or stops the Ollama service. The underlying runner stays unknown unless
+                Ollama reports verified details.
+              </p>
+              <label>
+                Request timeout (seconds)
+                <input
+                  max={300}
+                  min={0.1}
+                  onChange={(event) => setField("timeout_seconds", event.target.value)}
+                  step="any"
+                  type="number"
+                  value={values.timeout_seconds}
+                />
+              </label>
+              <label>
+                Streaming mode
+                <select
+                  onChange={(event) =>
+                    setField(
+                      "streaming_mode",
+                      event.target.value as EngineFormValues["streaming_mode"],
+                    )
+                  }
+                  value={values.streaming_mode}
+                >
+                  <option value="auto">Use streaming when supported</option>
+                  <option value="required">Require streaming</option>
+                  <option value="disabled">Use non-streaming responses</option>
+                </select>
+              </label>
+            </>
+          )}
           {isOpenAiCompatible && (
             <>
               <label>
@@ -1222,7 +1311,7 @@ function EngineProfileDialog({
           )}
           <details className="advanced-fields">
             <summary>Connection details</summary>
-            {!isLlamaCpp && (
+            {!isLlamaCpp && !isOllama && (
               <>
                 <label>
                   Health route <span className="optional-label">Optional</span>

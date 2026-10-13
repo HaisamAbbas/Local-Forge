@@ -1,6 +1,8 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+const apiOrigin = process.env.LOCALFORGE_VITE_API_ORIGIN ?? "http://127.0.0.1:8000";
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -8,8 +10,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/health": "http://127.0.0.1:8000",
-      "/api/v1": "http://127.0.0.1:8000",
+      "/health": apiOrigin,
+      "/api/v1": apiOrigin,
     },
   },
   test: {

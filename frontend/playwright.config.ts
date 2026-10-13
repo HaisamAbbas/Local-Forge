@@ -1,6 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+
+const testDataDirectory = path.join(os.tmpdir(), "localforge-playwright", randomUUID());
 
 export default defineConfig({
   testDir: "./e2e",
@@ -11,7 +14,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:15174",
     trace: "retain-on-failure",
   },
   projects: [
@@ -23,19 +26,22 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "uv run --project ../backend uvicorn localforge.api.main:app --host 127.0.0.1 --port 8000",
-      url: "http://127.0.0.1:8000/health",
-      reuseExistingServer: !process.env.CI,
+        "uv run --project ../backend uvicorn localforge.api.main:app --host 127.0.0.1 --port 18114",
+      url: "http://127.0.0.1:18114/health",
+      reuseExistingServer: false,
       timeout: 60_000,
       env: {
-        LOCALFORGE_DATA_DIR: path.join(os.tmpdir(), "localforge-playwright", String(process.pid)),
+        LOCALFORGE_DATA_DIR: testDataDirectory,
       },
     },
     {
-      command: "npm run dev -- --host 127.0.0.1 --port 5173 --strictPort",
-      url: "http://127.0.0.1:5173/",
-      reuseExistingServer: !process.env.CI,
+      command: "npm run dev -- --host 127.0.0.1 --port 15174 --strictPort",
+      url: "http://127.0.0.1:15174/",
+      reuseExistingServer: false,
       timeout: 60_000,
+      env: {
+        LOCALFORGE_VITE_API_ORIGIN: "http://127.0.0.1:18114",
+      },
     },
   ],
 });

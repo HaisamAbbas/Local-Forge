@@ -746,6 +746,23 @@ export function WorkloadsScreen() {
                         . Token metadata: {selectedModel.tokenizer_identity ?? "not reported"}.
                       </small>
                     )}
+                    {selectedEngine?.adapter_id === "localforge.ollama" && (
+                      <p className="workload-note workload-field--wide" role="note">
+                        {selectedModel
+                          ? "This model was reported in the attached local Ollama inventory. It must already be installed. LOCALFORGE never downloads or removes models."
+                          : "Only models already installed in the attached local Ollama server can be benchmarked. Install models outside LOCALFORGE, then probe again; LOCALFORGE never downloads or removes models."}
+                        {selectedModel && (
+                          <>
+                            {" "}
+                            Underlying runner:{" "}
+                            {typeof selectedModel.engine_extensions?.ollama?.runner === "string"
+                              ? selectedModel.engine_extensions.ollama.runner
+                              : "unknown"}
+                            .
+                          </>
+                        )}
+                      </p>
+                    )}
                   </label>
                   {selectedEngine && selectedEngine.status !== "enabled" && (
                     <div className="workload-engine-state workload-field--wide">

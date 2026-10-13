@@ -125,6 +125,7 @@ export type EngineModel = {
   size_bytes: number | null;
   tokenizer_identity: string | null;
   max_context_tokens: number | null;
+  engine_extensions?: Record<string, Record<string, unknown>>;
   status: string;
 };
 

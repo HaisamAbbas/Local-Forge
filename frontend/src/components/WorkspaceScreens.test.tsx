@@ -87,6 +87,22 @@ const llamaCppFixture: AdapterManifest = {
   documentation_url: "https://github.com/ggml-org/llama.cpp",
 };
 
+const ollamaFixture: AdapterManifest = {
+  adapter_id: "localforge.ollama",
+  adapter_version: "1.0.0",
+  display_name: "Ollama",
+  description: "Attach to an existing local Ollama server.",
+  category: "native_api",
+  integration_modes: ["attached_endpoint"],
+  operating_systems: ["windows", "linux", "macos"],
+  declared_capabilities: ["health", "model_inventory", "streaming"],
+  supported_transports: ["http", "ollama_ndjson"],
+  native_metrics: ["ollama.eval_duration"],
+  config_schema: {},
+  known_limitations: ["Runner details are unknown unless verified."],
+  documentation_url: "https://docs.ollama.com/api",
+};
+
 function engineFixture(overrides: Partial<EngineProfile> = {}): EngineProfile {
   return {
     id: "profile-1",
@@ -431,6 +447,42 @@ describe("engine management", () => {
             context_size: 4096,
             gpu_layers: "all",
           }),
+        },
+      }),
+    );
+  });
+
+  it("configures Ollama as local attach-only with no implicit model download", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([ollamaFixture]);
+    render(<EnginesScreen />);
+
+    const adapterHeading = await screen.findByRole("heading", { name: "Ollama" });
+    const card = adapterHeading.closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card as HTMLElement).getByRole("button", { name: "Add this adapter" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    expect(within(dialog).getByRole("combobox", { name: "Connection mode" })).toHaveValue(
+      "attached_endpoint",
+    );
+    expect(within(dialog).getByRole("textbox", { name: /Ollama local server URL/ })).toHaveValue(
+      "http://127.0.0.1:11434",
+    );
+    expect(within(dialog).getByText(/never pulls or deletes models/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Models route")).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: "Local Ollama" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+
+    expect(createEngineProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Local Ollama",
+        adapter_id: "localforge.ollama",
+        integration_mode: "attached_endpoint",
+        endpoint_url: "http://127.0.0.1:11434",
+        engine_extensions: {
+          ollama: expect.objectContaining({ timeout_seconds: 30, streaming_mode: "auto" }),
         },
       }),
     );
