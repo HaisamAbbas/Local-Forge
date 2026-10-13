@@ -140,6 +140,12 @@ See the [vLLM adapter guide](docs/vllm.md) and [SGLang adapter guide](docs/sglan
 credential, metric, version-discovery, and platform coverage details. Neither connector has been
 live-tested against an installed serving engine or GPU; default checks use local fixtures only.
 
+Prompt 15B adds attach-only TensorRT-LLM, LMDeploy, LightLLM, TGI, LocalAI, and KoboldCpp
+connectors. NVIDIA Triton with the TensorRT-LLM backend remains planned because its documented
+model-specific API is not the chat API currently supported by the adapter boundary. See the
+[connector support matrix](docs/connector-support-matrix.md) for version fixture coverage, platform
+notes, maintenance status, and stack fingerprint behavior.
+
 The database is created in the platform's per-user LOCALFORGE application-data directory. To use a
 different directory for local development, set `LOCALFORGE_DATA_DIR` before starting the API:
 

@@ -1,6 +1,6 @@
 # LOCALFORGE Inference Lab implementation plan
 
-**Status:** Prompts 0-15A are implemented and verified; Prompt 15B is next.
+**Status:** Prompts 0-15B are implemented and verified; Prompt 15C is next.
 **Reviewed:** 13 October 2026
 **Product and measurement source of truth:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Implementation-Spec-v1.0.md`  
 **Implementation sequence:** `ImplementationPlan/LOCALFORGE-Inference-Lab-Codex-Implementation-Prompt-Pack-v1.0.md`
@@ -113,7 +113,7 @@ Follow the prompt pack in one conversation and the same workspace. Prompt 0 is c
 
 Prompts 15A–15C expand the ecosystem after the MVP adapters and are performed in that order. Before each real connector, check its current official documentation and record the tested version. A catalog entry alone is not a claim of working support.
 
-Prompts 0–14 are complete. Prompt 15A is next.
+Prompts 0–15B are complete. Prompt 15C is next.
 
 ## First usable vertical slice
 
@@ -605,3 +605,57 @@ Backend, from `backend/`:
 - `git diff --check` - passed.
 
 No frontend files were changed for this prompt.
+
+## Prompt 15B completion record
+
+### Delivered
+
+- Added attach-only connectors for TensorRT-LLM `trtllm-serve`, LMDeploy, LightLLM, Hugging Face
+  TGI, LocalAI, and KoboldCpp using the shared guarded adapter path. The catalog also lists NVIDIA
+  Triton with its TensorRT-LLM backend as planned because its model-specific generate API is not a
+  verified Chat Completions integration.
+- Extended adapter manifests with implementation status, fixture-version coverage, maintenance
+  status, recommended installation status, operating-system notes, and documentation links. TGI's
+  maintenance status appears in the catalog UI; the planned Triton entry cannot be added as an
+  engine profile.
+- Kept version, metrics, and model metadata unknown when an adapter cannot verify them. TGI and
+  TensorRT-LLM expose their documented version/metrics routes; LightLLM and KoboldCpp do not claim
+  Prometheus support. KoboldCpp is not reported as a lower-level llama.cpp backend.
+- Added serving-stack fingerprints and persist them in each run snapshot before warmups. Collection
+  has a 15-second ceiling and failure is recorded without failing the benchmark. LocalAI stores its
+  backend layer only when its selected model configuration explicitly reports a validated backend
+  name; missing, malformed, or unauthorized configuration remains unknown. Run snapshots omit raw
+  endpoint paths, which may contain credentials.
+- Added per-adapter local HTTP fixture coverage for request/stream behavior, version and model
+  inventory, errors, timeouts, native metric provenance or unsupported status, and fingerprint
+  composition. No default test downloads a model or contacts an upstream serving endpoint.
+- Added the evidence-backed connector matrix in `docs/connector-support-matrix.md` with official
+  references and an explicit distinction between fixture versions and live-tested releases.
+
+### Scope and limitations
+
+- All newly implemented connectors attach to an already running endpoint. LOCALFORGE does not
+  install engines, download models, launch their servers, or detect accelerators in this prompt.
+- Version strings are synthetic local fixture values. No upstream binary/server or accelerator was
+  live-tested. Triton with TensorRT-LLM remains catalog-only and has no callable adapter.
+- LocalAI backend discovery may require LocalAI administrator authorization. Without an explicitly
+  reported backend value, the stack fingerprint leaves that layer unknown.
+
+### Checks run
+
+Backend, from `backend/`:
+
+- `uv run pytest -q` - passed (217 tests; 5 opt-in live tests skipped).
+- `uv run ruff format --check src tests` - passed (79 files).
+- `uv run ruff check src tests` - passed.
+- `uv run mypy` - passed (48 source files).
+
+Frontend, from `frontend/`:
+
+- `npm run test` - passed (31 tests).
+- `npm run lint` - passed.
+- `npm run typecheck` - passed.
+- `npm run build` - passed.
+- `npm run format:check` - passed.
+
+Repository diff check: `git diff --check` - passed.
