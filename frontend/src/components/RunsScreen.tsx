@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   cancelBenchmarkRun,
+  deleteRun,
   getRun,
   listBenchmarkPlans,
   listEngineProfiles,
@@ -34,6 +35,7 @@ import {
   summarizedRequestThroughput,
 } from "../lib/run-state";
 import { groupWarnings } from "../lib/run-measurements";
+import { RepeatWithChangePanel, RunCleanupControl } from "./RunActions";
 import { RunRequestCharts } from "./RunCharts";
 import { RunKeyResults, RunMeasurements } from "./RunMeasurements";
 import { RequestPointChart } from "./charts/RequestPointChart";
@@ -239,6 +241,10 @@ export function RunsScreen({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail>(EMPTY_DETAIL);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [repeatOpen, setRepeatOpen] = useState(false);
   const [elapsedNow, setElapsedNow] = useState(Date.now());
   const eventsRef = useRef<RunEventRecord[]>([]);
   const samplesRef = useRef<RequestSample[]>([]);
@@ -300,6 +306,9 @@ export function RunsScreen({
     incompleteBySequenceRef.current = new Map();
     interruptedSamplesRef.current = [];
     setConfirmCancel(false);
+    setConfirmDelete(false);
+    setDeleteError(null);
+    setRepeatOpen(false);
     setDetail({ ...EMPTY_DETAIL, loading: Boolean(selectedRunId) });
     if (!selectedRunId) return;
 
@@ -657,6 +666,34 @@ export function RunsScreen({
     }
   }
 
+  async function confirmDeletion() {
+    if (!selectedRun || !selectedIsTerminal) return;
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      await deleteRun(selectedRun.id);
+      setRuns((current) => current.filter((run) => run.id !== selectedRun.id));
+      setConfirmDelete(false);
+      onSelectRun(null);
+      void refreshHistory();
+    } catch (error) {
+      setDeleteError(
+        error instanceof ApiError && error.code === "run_active"
+          ? "This run is still active. Cancel it and wait for it to finish before deleting it."
+          : errorMessage(error),
+      );
+    } finally {
+      setDeletePending(false);
+    }
+  }
+
+  function afterCleanup(deletedRunIds: string[]) {
+    const deleted = new Set(deletedRunIds);
+    setRuns((current) => current.filter((run) => !deleted.has(run.id)));
+    if (selectedRunId && deleted.has(selectedRunId)) onSelectRun(null);
+    void refreshHistory();
+  }
+
   return (
     <div className="runs-layout">
       <section className="panel run-history-panel" aria-labelledby="run-history-title">
@@ -673,6 +710,7 @@ export function RunsScreen({
             Refresh
           </button>
         </div>
+        {runs.length > 0 && <RunCleanupControl onCleaned={afterCleanup} />}
         {historyError && (
           <div className="notice notice--warning" role="alert">
             {historyError}
@@ -781,6 +819,25 @@ export function RunsScreen({
                 >
                   Back to history
                 </button>
+                {detail.metadata?.plan && !repeatOpen && (
+                  <button
+                    className="button button--secondary"
+                    onClick={() => setRepeatOpen(true)}
+                    type="button"
+                  >
+                    Repeat with one change
+                  </button>
+                )}
+                {selectedIsTerminal && (
+                  <button
+                    className="button button--danger-quiet"
+                    disabled={deletePending}
+                    onClick={() => setConfirmDelete(true)}
+                    type="button"
+                  >
+                    Delete run
+                  </button>
+                )}
                 {!selectedIsTerminal && selectedRun.status !== "cancelling" && (
                   <button
                     className="button button--danger-quiet"
@@ -831,6 +888,48 @@ export function RunsScreen({
                   </button>
                 </div>
               </div>
+            )}
+            {confirmDelete && selectedIsTerminal && (
+              <div className="run-cancel-confirm run-delete-confirm" role="alert">
+                <p>
+                  Delete this run with its samples, events and measurements? Saved reports are kept.
+                  This cannot be undone.
+                </p>
+                <div className="run-detail-actions">
+                  <button
+                    className="button button--danger"
+                    disabled={deletePending}
+                    onClick={() => void confirmDeletion()}
+                    type="button"
+                  >
+                    {deletePending ? "Deleting run…" : "Confirm delete"}
+                  </button>
+                  <button
+                    className="button button--quiet"
+                    disabled={deletePending}
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      setDeleteError(null);
+                    }}
+                    type="button"
+                  >
+                    Keep run
+                  </button>
+                </div>
+                {deleteError && <p className="field-error">{deleteError}</p>}
+              </div>
+            )}
+            {repeatOpen && detail.metadata?.plan && (
+              <RepeatWithChangePanel
+                onClose={() => setRepeatOpen(false)}
+                onStarted={(runId) => {
+                  setRepeatOpen(false);
+                  void refreshHistory();
+                  onSelectRun(runId);
+                }}
+                plan={detail.metadata.plan}
+                workload={detail.metadata.workload}
+              />
             )}
             {selectedRun.status === "cancelling" && (
               <p className="notice notice--warning" role="status">

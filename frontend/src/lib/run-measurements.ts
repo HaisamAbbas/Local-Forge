@@ -45,6 +45,10 @@ const FLAG_TEXT: Record<string, string> = {
   unavailable_token_timestamps_not_provided: "The engine does not report per-token timing",
   unavailable_no_samples: "No samples were recorded",
   unavailable_prefill_interval: "The engine does not report a prefill interval",
+  unavailable_token_counts_missing:
+    "The engine returned no token counts; turn on “include usage” in the engine profile if the server supports it",
+  unavailable_exact_token_timing_or_counts: "The engine returned no exact token counts or timings",
+  unavailable_measurement_window: "No measured generation window was recorded",
   missing_native_metric: "The engine did not report this value",
   missing_before_snapshot: "The engine has no server-wide counters to snapshot",
   missing_after_snapshot: "The engine has no server-wide counters to snapshot",

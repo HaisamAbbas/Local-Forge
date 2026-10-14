@@ -88,7 +88,13 @@ export function RunKeyResults({
         label="Generation speed"
         qualifier="tokens/s"
         value={metricText(generation)}
-        detail={output ? `Output ${metricText(output, "tokens/s")} incl. first token wait` : "—"}
+        detail={
+          generation?.quality_flags.includes("unavailable_token_counts_missing")
+            ? "No token counts from the engine. Turn on “include usage” in its engine settings."
+            : output
+              ? `Output ${metricText(output, "tokens/s")} incl. first token wait`
+              : "—"
+        }
       />
       <KeyResult
         label="Request rate"
