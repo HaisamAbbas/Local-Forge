@@ -1047,3 +1047,170 @@ export async function saveWorkspaceSettings(
 export type HardwareDetails = NonNullable<MachineProfile["hardware"]> & {
   cpu_physical_cores?: number | null;
 };
+
+// --- Saved reports and model inventory (Reports and Models screens) ---
+
+/** A report file saved by the API. `size_bytes` is null when unknown. */
+export type SavedReport = {
+  id: string;
+  created_at: string;
+  title: string;
+  format: string;
+  run_ids: string[];
+  size_bytes: number | null;
+  /** False when the saved file is missing from the reports folder. */
+  available: boolean;
+};
+
+export const listReports = () => apiRequest<SavedReport[]>("/api/v1/reports");
+
+/** Same-origin download route; used as a plain link, as the Experiments report export does. */
+export const reportDownloadUrl = (id: string) =>
+  `/api/v1/reports/${encodeURIComponent(id)}/download`;
+
+export const deleteReport = (id: string) =>
+  apiRequest<void>(`/api/v1/reports/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+/** A model visible to a connected engine. Every nullable field means "unknown", never zero. */
+export type ModelRecord = {
+  id: string;
+  model_ref: string | null;
+  display_name: string | null;
+  status: string;
+  engine_profile_id: string;
+  engine_label: string | null;
+  adapter_id: string | null;
+  format: string | null;
+  quantization: string | null;
+  size_bytes: number | null;
+  max_context_tokens: number | null;
+  revision: string | null;
+  tokenizer_identity: string | null;
+  updated_at: string | null;
+};
+
+export const listModels = () => apiRequest<ModelRecord[]>("/api/v1/models");
+
+// --- Run retention and plan cloning (Runs screen: delete, clean up, repeat with one change) ---
+
+export const deleteRun = (id: string) =>
+  apiRequest<void>(`/api/v1/runs/${id}`, { method: "DELETE" });
+
+export type RunCleanupInput = {
+  /** ISO timestamp: only runs created before it. */
+  before: string | null;
+  statuses: string[] | null;
+  /** Always keep this many of the newest terminal runs. */
+  keep_latest: number | null;
+  dry_run: boolean;
+};
+export type RunCleanupResult = { run_ids: string[]; count: number; dry_run: boolean };
+
+export const cleanupRuns = (input: RunCleanupInput) =>
+  apiRequest<RunCleanupResult>("/api/v1/runs/cleanup", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export type PlanCloneChanges = Partial<{
+  model_artifact_id: string | null;
+  engine_profile_id: string;
+  concurrency: number;
+  max_output_tokens: number;
+  temperature: number | null;
+  warmup_count: number;
+  request_count: number;
+  request_timeout_seconds: number;
+}>;
+export type PlanCloneResponse = BenchmarkPlanResponse & { changed_fields: string[] };
+
+export const cloneBenchmarkPlan = (
+  planId: string,
+  input: { name: string | null; changes: PlanCloneChanges },
+) =>
+  apiRequest<PlanCloneResponse>(`/api/v1/benchmark-plans/${planId}/clone`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+// --- Engine discovery: scan this computer (127.0.0.1) for running engines ---
+export type DiscoveryPortStatus = "found" | "no_response" | "unrecognized" | "skipped_self";
+export type DiscoveryScannedPort = { port: number; status: DiscoveryPortStatus };
+export type DiscoveredEngine = {
+  adapter_id: string;
+  display_name: string;
+  endpoint_url: string;
+  engine_version: string | null;
+  models: string[];
+  evidence: string;
+  existing_profile_ids: string[];
+};
+export type EngineDiscoveryResult = {
+  scanned: DiscoveryScannedPort[];
+  candidates: DiscoveredEngine[];
+  duration_ms: number;
+};
+
+/** Only checks loopback ports on this computer; optional ports override the default list. */
+export const discoverEngines = (ports?: number[]) =>
+  apiRequest<EngineDiscoveryResult>(
+    ports?.length
+      ? `/api/v1/engines/discover?ports=${ports.map((port) => String(port)).join(",")}`
+      : "/api/v1/engines/discover",
+  );
+
+// --- Engine recommendations: which inference engines suit this machine (ranked) ---
+// Ranked by hardware fit and what is installed or running; not a speed measurement.
+export type EngineFit = "best" | "good" | "possible" | "unsuitable";
+export type EngineInstallStatus = "running" | "installed" | "not_installed" | "unknown";
+export type EngineRecommendation = {
+  rank: number;
+  adapter_id: string;
+  display_name: string;
+  fit: EngineFit;
+  score: number;
+  reasons: string[];
+  cautions: string[];
+  status: EngineInstallStatus;
+  status_detail: string | null;
+  endpoint_url: string | null;
+  existing_profile_ids: string[];
+  install: { summary: string; url: string; command: string | null };
+  measured: {
+    completed_runs: number;
+    best_generation_tokens_per_second: number | null;
+    model_ref: string | null;
+    run_id: string | null;
+  } | null;
+};
+export type EngineRecommendationsResult = {
+  generated_at: string;
+  method: string;
+  machine: {
+    summary: string;
+    os: string | null;
+    arch: string | null;
+    cpu_model: string | null;
+    cpu_logical_cores: number | null;
+    cpu_physical_cores: number | null;
+    memory_total_bytes: number | null;
+    accelerators: unknown[];
+    cpu_features: { avx2: boolean | null; avx512: boolean | null };
+  };
+  model_size_guidance: {
+    basis: "gpu_memory" | "system_memory";
+    memory_budget_bytes: number | null;
+    comfortable_params_billion_q4: number | null;
+    max_params_billion_q4: number | null;
+    /** Without a discrete GPU, speed limits model size; estimated from this machine's runs. */
+    speed_basis?: "measured" | "not_measured" | "not_applicable";
+    measured_read_gib_per_second?: number | null;
+    readable_params_billion_q4?: number | null;
+    text: string;
+  };
+  recommendations: EngineRecommendation[];
+};
+
+/** Rescans engines running on this computer (127.0.0.1) and ranks engines for it. */
+export const fetchEngineRecommendations = () =>
+  apiRequest<EngineRecommendationsResult>("/api/v1/engines/recommendations");
