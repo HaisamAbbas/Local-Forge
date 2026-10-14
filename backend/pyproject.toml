@@ -2,7 +2,16 @@
 name = "localforge-inference-lab"
 version = "0.1.0"
 description = "Local-first LLM inference benchmarking workbench"
+readme = "README.md"
 requires-python = ">=3.12"
+keywords = ["llm", "inference", "benchmark", "ollama", "llama.cpp", "vllm"]
+classifiers = [
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Benchmark",
+]
 dependencies = [
     "fastapi>=0.115",
     "httpx2>=1.0",
@@ -20,15 +29,28 @@ dev = [
     "types-psutil>=7.2.2.20260906",
 ]
 
+[project.urls]
+Repository = "https://github.com/HaisamAbbas/Local-Forge"
+
 [project.scripts]
+localforge = "localforge.cli:main"
+# Same command under the package name, so `uvx localforge-inference-lab` works directly.
+localforge-inference-lab = "localforge.cli:main"
 localforge-worker = "localforge.worker.__main__:main"
 
 [build-system]
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+# The compiled browser UI is gitignored but must ship in release packages.
+artifacts = ["src/localforge/web/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/localforge"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/localforge", "README.md", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
