@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from localforge.adapters.catalog import AdapterCatalog
 from localforge.api.dependencies import DatabaseConnection
 from localforge.api.schemas import (
+    RunCleanupRequest,
+    RunCleanupResponse,
     RunEventPage,
     RunMetricsResponse,
     RunSamplesResponse,
@@ -38,6 +40,7 @@ from localforge.core.models import (
     ModelArtifact,
 )
 from localforge.core.urls import endpoint_is_remote
+from localforge.run_retention import RunStillActive, cleanup_runs, delete_terminal_runs
 from localforge.runs import (
     ACTIVE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -374,6 +377,58 @@ def get_run(run_id: UUID, connection: DatabaseConnection) -> BenchmarkRun:
     if run is None:
         raise _not_found()
     return run
+
+
+def _run_active_error(error: RunStillActive) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "run_active",
+            "message": "Cancel the run and wait for it to finish before deleting it.",
+            "run_id": str(error.run.id),
+            "run_status": error.run.status.value,
+        },
+    )
+
+
+@router.post("/runs/cleanup", response_model=RunCleanupResponse, tags=["runs"])
+def cleanup_finished_runs(
+    body: RunCleanupRequest, connection: DatabaseConnection
+) -> RunCleanupResponse:
+    """Preview or delete terminal runs matching every supplied filter (dry run by default)."""
+
+    try:
+        run_ids = cleanup_runs(
+            connection,
+            before=body.before,
+            statuses=body.statuses,
+            keep_latest=body.keep_latest,
+            dry_run=body.dry_run,
+        )
+    except RunStillActive as error:  # pragma: no cover - selection is terminal-only
+        raise _run_active_error(error) from error
+    return RunCleanupResponse(run_ids=run_ids, count=len(run_ids), dry_run=body.dry_run)
+
+
+@router.delete("/runs/{run_id}", status_code=204, tags=["runs"])
+def delete_run(run_id: UUID, connection: DatabaseConnection) -> Response:
+    """Delete a finished run with its samples and events; saved reports are kept."""
+
+    if RecordRepository(connection, BenchmarkRun).get(run_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "run_not_found", "message": "The benchmark run was not found."},
+        )
+    try:
+        deleted = delete_terminal_runs(connection, [run_id])
+    except RunStillActive as error:
+        raise _run_active_error(error) from error
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "run_not_found", "message": "The benchmark run was not found."},
+        )
+    return Response(status_code=204)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=BenchmarkRun, tags=["runs"])

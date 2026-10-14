@@ -410,14 +410,20 @@ def delete_benchmark_run(connection: sqlite3.Connection, run_id: UUID) -> bool:
     """Delete a run and its raw samples atomically, leaving referenced setup records intact."""
 
     with transaction(connection):
-        connection.execute("DELETE FROM request_samples WHERE run_id = ?", (str(run_id),))
-        connection.execute("DELETE FROM metric_samples WHERE run_id = ?", (str(run_id),))
-        connection.execute("DELETE FROM run_events WHERE run_id = ?", (str(run_id),))
-        connection.execute("DELETE FROM run_event_clocks WHERE run_id = ?", (str(run_id),))
-        connection.execute("DELETE FROM resource_locks WHERE run_id = ?", (str(run_id),))
-        connection.execute("DELETE FROM worker_leases WHERE run_id = ?", (str(run_id),))
-        cursor = connection.execute(
-            "DELETE FROM domain_records WHERE entity_type = ? AND id = ?",
-            (BenchmarkRun.__name__, str(run_id)),
-        )
+        return delete_benchmark_run_rows(connection, run_id)
+
+
+def delete_benchmark_run_rows(connection: sqlite3.Connection, run_id: UUID) -> bool:
+    """Delete a run and every row it owns; the caller must already hold a transaction."""
+
+    connection.execute("DELETE FROM request_samples WHERE run_id = ?", (str(run_id),))
+    connection.execute("DELETE FROM metric_samples WHERE run_id = ?", (str(run_id),))
+    connection.execute("DELETE FROM run_events WHERE run_id = ?", (str(run_id),))
+    connection.execute("DELETE FROM run_event_clocks WHERE run_id = ?", (str(run_id),))
+    connection.execute("DELETE FROM resource_locks WHERE run_id = ?", (str(run_id),))
+    connection.execute("DELETE FROM worker_leases WHERE run_id = ?", (str(run_id),))
+    cursor = connection.execute(
+        "DELETE FROM domain_records WHERE entity_type = ? AND id = ?",
+        (BenchmarkRun.__name__, str(run_id)),
+    )
     return cursor.rowcount > 0

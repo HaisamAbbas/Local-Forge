@@ -34,6 +34,16 @@ placed in an opted-in prompt or output, so review retained content before export
 validation errors omit submitted values. Worker subprocess standard output and standard error are
 discarded.
 
+Runs are kept until the user deletes them. Only terminal runs (completed, failed, cancelled,
+interrupted) can be deleted, one at a time or through the cleanup endpoint, which is a dry run
+unless `dry_run` is `false`. A deletion removes the run with its request samples, metric samples,
+events, and any leftover locks or lease in one transaction. Experiment trials that pointed at a
+deleted run are kept as failed trials without a run and name the deleted run in their error.
+Saved reports are snapshots: they are not deleted with their runs, stay downloadable, and list
+the runs that no longer exist. Deleting a report removes its record and only its own file inside
+the reports directory; a report whose stored path fails the path checks has only its record
+removed.
+
 ## Files and database
 
 Dataset uploads are bounded by `LOCALFORGE_MAX_DATASET_UPLOAD_BYTES` (100 MiB by default) and the
