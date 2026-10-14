@@ -256,6 +256,74 @@ def detect_total_memory_bytes() -> int | None:
     return None
 
 
+@dataclass(frozen=True)
+class CpuFeatures:
+    """SIMD support relevant to CPU inference; None means it could not be determined."""
+
+    avx2: bool | None = None
+    avx512: bool | None = None
+
+
+# IsProcessorFeaturePresent constants from winnt.h.
+PF_AVX2_INSTRUCTIONS_AVAILABLE = 40
+PF_AVX512F_INSTRUCTIONS_AVAILABLE = 41
+_X86_ARCHITECTURES = frozenset({"x86_64", "amd64", "x64", "i386", "i686", "x86"})
+
+
+def parse_linux_cpu_flags(text: str) -> CpuFeatures:
+    """Read AVX2/AVX-512F from the first ``flags`` line of /proc/cpuinfo text."""
+
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "flags":
+            flags = set(value.split())
+            return CpuFeatures(avx2="avx2" in flags, avx512="avx512f" in flags)
+    return CpuFeatures()
+
+
+def _sysctl_flag(name: str, runner: CommandRunner) -> bool | None:
+    output = runner(["sysctl", "-n", name], 1)
+    value = output.strip() if output else ""
+    return value == "1" if value in {"0", "1"} else None
+
+
+def detect_cpu_features(
+    *,
+    platform_name: str | None = None,
+    architecture: str | None = None,
+    command_runner: CommandRunner | None = None,
+) -> CpuFeatures:
+    """Detect AVX2/AVX-512F cheaply without running inference code; unknown stays None."""
+
+    system = platform_name or sys.platform
+    machine = (architecture if architecture is not None else platform.machine()).casefold()
+    if machine and machine not in _X86_ARCHITECTURES:
+        return CpuFeatures()  # AVX does not apply to ARM CPUs such as Apple silicon.
+    if system == "win32":
+        try:
+            kernel32 = ctypes.WinDLL("kernel32")
+            present = kernel32.IsProcessorFeaturePresent
+            return CpuFeatures(
+                avx2=bool(present(PF_AVX2_INSTRUCTIONS_AVAILABLE)),
+                avx512=bool(present(PF_AVX512F_INSTRUCTIONS_AVAILABLE)),
+            )
+        except (AttributeError, OSError, TypeError):
+            return CpuFeatures()
+    if system.startswith("linux"):
+        try:
+            text = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return CpuFeatures()
+        return parse_linux_cpu_flags(text)
+    if system == "darwin":
+        runner = command_runner or _run_command
+        return CpuFeatures(
+            avx2=_sysctl_flag("hw.optional.avx2_0", runner),
+            avx512=_sysctl_flag("hw.optional.avx512f", runner),
+        )
+    return CpuFeatures()
+
+
 def classify_integrated(vendor: str | None, name: str) -> bool | None:
     """Return True/False only when the vendor and product name make it unambiguous."""
 

@@ -25,6 +25,7 @@ from localforge.adapters.contracts import AdapterManifest, AdapterProcessHandle
 from localforge.api.experiments import router as experiment_router
 from localforge.api.playground import router as playground_router
 from localforge.api.profiles import router as profile_router
+from localforge.api.recommendations import router as recommendation_router
 from localforge.api.runs import (
     monitor_run_workers,
     shutdown_run_workers,
@@ -419,6 +420,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         catalog = cast(AdapterCatalog, request.app.state.adapter_catalog)
         return visible_catalog_manifests(catalog, cast(Path, request.app.state.database_path))
 
+    # Before the profile router so "/engines/recommendations" is not read as a profile id.
+    application.include_router(recommendation_router)
     application.include_router(profile_router)
     application.include_router(playground_router)
     application.include_router(workload_router)

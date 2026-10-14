@@ -3,6 +3,7 @@
 import argparse
 import os
 import socket
+import sys
 import threading
 import time
 import urllib.request
@@ -49,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not open the browser automatically.",
     )
     parser.add_argument("--version", action="version", version=f"localforge {__version__}")
+    parser.epilog = (
+        "Run `localforge recommend` to rank inference engines for this machine "
+        "(add --json for machine-readable output)."
+    )
     return parser
 
 
@@ -98,9 +103,99 @@ def open_when_ready(url: str, open_browser: Callable[[str], object] = webbrowser
         time.sleep(0.25)
 
 
+def build_recommend_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="localforge recommend",
+        description=(
+            "Rank inference engines by fit for this machine's hardware and what is already "
+            "installed. Works without the LocalForge server running."
+        ),
+    )
+    parser.add_argument("--json", action="store_true", help="Print the full result as JSON.")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="LocalForge data folder to read saved profiles and measured runs from.",
+    )
+    return parser
+
+
+def _print(text: str = "") -> None:
+    """Print, replacing characters the console encoding cannot show."""
+
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "ascii"
+        print(text.encode(encoding, "replace").decode(encoding))
+
+
+def _data_directory(requested: Path | None) -> Path:
+    if requested is not None:
+        return requested.expanduser().resolve()
+    from localforge.storage.paths import default_data_directory
+
+    return default_data_directory()
+
+
+def recommend_main(argv: Sequence[str]) -> int:
+    args = build_recommend_parser().parse_args(argv)
+    from localforge.recommendations import recommend_for_data_directory, render_text
+
+    response = recommend_for_data_directory(_data_directory(args.data_dir))
+    if args.json:
+        _print(response.model_dump_json(indent=2))
+    else:
+        for line in render_text(response):
+            _print(line)
+    return 0
+
+
+STARTUP_RECOMMENDATION_SECONDS = 3.0
+STARTUP_TOP_ENGINES = 5
+
+
+def startup_recommendation_lines(data_directory: Path, first_run: bool, port: int) -> list[str]:
+    """Lines to print before the server starts; empty on any error or after ~3 seconds."""
+
+    result: list[str] = []
+
+    def compute() -> None:
+        from localforge.recommendations import (
+            best_fit_line,
+            recommend_for_data_directory,
+            render_text,
+        )
+
+        response = recommend_for_data_directory(
+            data_directory, self_ports=(port,), discovery_budget_seconds=2.0
+        )
+        if first_run:
+            result.extend([*render_text(response, limit=STARTUP_TOP_ENGINES), ""])
+        else:
+            line = best_fit_line(response)
+            if line:
+                result.append(line)
+
+    def guarded() -> None:
+        try:
+            compute()
+        except Exception:
+            result.clear()
+
+    worker = threading.Thread(target=guarded, daemon=True)
+    worker.start()
+    worker.join(STARTUP_RECOMMENDATION_SECONDS)
+    return list(result) if not worker.is_alive() else []
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["recommend"]:
+        return recommend_main(arguments[1:])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if not is_loopback_host(args.host):
         parser.error(
             "LocalForge only listens on loopback addresses (for example 127.0.0.1) so its "
@@ -110,10 +205,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The API and its benchmark worker processes both read this.
         os.environ["LOCALFORGE_DATA_DIR"] = str(args.data_dir.expanduser().resolve())
 
+    data_directory = _data_directory(args.data_dir)
+    first_run = not (data_directory / "localforge.sqlite3").exists()
     port = choose_port(args.host, args.port)
     url = browser_url(args.host, port)
     has_ui = bundled_ui_directory() is not None
 
+    for line in startup_recommendation_lines(data_directory, first_run, port):
+        _print(line)
     print(f"LocalForge {__version__} is running at {url}")
     if not has_ui:
         print(
