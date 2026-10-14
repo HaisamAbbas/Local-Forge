@@ -18,6 +18,8 @@ from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, AdapterNotFoundError
 from localforge.api.dependencies import DatabaseConnection, LocalAdapterCatalog
 from localforge.api.schemas import (
+    BenchmarkPlanCloneRequest,
+    BenchmarkPlanCloneResponse,
     BenchmarkPlanCreate,
     BenchmarkPlanExport,
     BenchmarkPlanResponse,
@@ -939,6 +941,225 @@ def create_benchmark_plan(
     )
     RecordRepository(connection, BenchmarkPlan).create(plan)
     return BenchmarkPlanResponse(plan=plan, preflight=preflight)
+
+
+_CLONE_CHANGE_ORDER = (
+    "model_artifact_id",
+    "engine_profile_id",
+    "concurrency",
+    "max_output_tokens",
+    "temperature",
+    "warmup_count",
+    "request_count",
+    "request_timeout_seconds",
+)
+_CLONE_WORKLOAD_FIELDS = {
+    "concurrency",
+    "max_output_tokens",
+    "temperature",
+    "warmup_count",
+    "request_count",
+}
+
+
+def _clone_value_label(connection: sqlite3.Connection, field: str, value: object) -> str:
+    if field == "engine_profile_id" and isinstance(value, UUID):
+        engine = RecordRepository(connection, EngineProfile).get(value)
+        return f"engine={engine.label if engine is not None else value}"
+    if field == "model_artifact_id":
+        if value is None:
+            return "model=engine default"
+        model = RecordRepository(connection, ModelArtifact).get(cast(UUID, value))
+        label = (model.model_ref or model.display_name) if model is not None else value
+        return f"model={label}"
+    if value is None:
+        return f"{field}=default"
+    if isinstance(value, float):
+        return f"{field}={value:g}"
+    return f"{field}={value}"
+
+
+def _invalid_clone_change(fields: list[str], message: str) -> HTTPException:
+    return _http_error(
+        422,
+        "invalid_request",
+        message,
+        fields=[{"field": f"body.changes.{name}", "error": "value_error"} for name in fields],
+    )
+
+
+def _cloned_workload(source: Workload, changes: dict[str, object], label: str) -> Workload:
+    values = source.model_dump(mode="python")
+    if "concurrency" in changes:
+        if source.concurrency_levels:
+            raise _invalid_clone_change(
+                ["concurrency"],
+                "This workload sweeps several concurrency levels; edit the sweep instead.",
+            )
+        values["concurrency"] = changes["concurrency"]
+    for name in ("max_output_tokens", "warmup_count", "request_count"):
+        if name in changes:
+            values[name] = changes[name]
+    if "temperature" in changes:
+        sampling = dict(source.sampling_config)
+        if changes["temperature"] is None:
+            sampling.pop("temperature", None)
+        else:
+            sampling["temperature"] = cast(float, changes["temperature"])
+        values["sampling_config"] = sampling
+    now = datetime.now(UTC)
+    values.update(
+        {
+            "id": uuid4(),
+            "created_at": now,
+            "updated_at": now,
+            "name": f"{source.name} ({label})"[:160],
+        }
+    )
+    try:
+        return Workload.model_validate(values)
+    except ValidationError as error:
+        raise _invalid_clone_change(
+            sorted(name for name in changes if name in _CLONE_WORKLOAD_FIELDS),
+            "The changed values are incompatible with this workload.",
+        ) from error
+
+
+def _clone_model_for_engine(
+    connection: sqlite3.Connection, source_plan: BenchmarkPlan, engine_id: UUID
+) -> UUID | None:
+    """Keep the source model if it fits the new engine, else match its ref on that engine."""
+
+    if source_plan.model_artifact_id is None:
+        return None
+    source_model = RecordRepository(connection, ModelArtifact).get(source_plan.model_artifact_id)
+    if source_model is None:
+        return None
+    if source_model.engine_profile_id in (None, engine_id):
+        return source_model.id
+    rows = connection.execute(
+        "SELECT payload_json FROM domain_records WHERE entity_type = ?",
+        (ModelArtifact.__name__,),
+    ).fetchall()
+    for row in rows:
+        candidate = ModelArtifact.model_validate(json.loads(row["payload_json"]))
+        if (
+            candidate.engine_profile_id == engine_id
+            and source_model.model_ref is not None
+            and candidate.model_ref == source_model.model_ref
+        ):
+            return candidate.id
+    return None
+
+
+@router.post(
+    "/benchmark-plans/{plan_id}/clone",
+    response_model=BenchmarkPlanCloneResponse,
+    status_code=201,
+    tags=["benchmark-plans"],
+)
+def clone_benchmark_plan(
+    plan_id: UUID,
+    body: BenchmarkPlanCloneRequest,
+    request: Request,
+    connection: DatabaseConnection,
+    catalog: LocalAdapterCatalog,
+) -> BenchmarkPlanCloneResponse:
+    """Create a new plan from a saved one with a few settings changed; the source is untouched."""
+
+    source_plan = RecordRepository(connection, BenchmarkPlan).get(plan_id)
+    if source_plan is None:
+        raise _http_error(404, "benchmark_plan_not_found", "The benchmark plan was not found.")
+    provided = body.changes.model_fields_set
+    changed_fields = [name for name in _CLONE_CHANGE_ORDER if name in provided]
+    changes: dict[str, object] = {name: getattr(body.changes, name) for name in changed_fields}
+    label = (
+        ", ".join(_clone_value_label(connection, name, changes[name]) for name in changed_fields)
+        or "repeat"
+    )
+
+    engine_id = cast(UUID, changes.get("engine_profile_id", source_plan.engine_profile_id))
+    if "model_artifact_id" in changes:
+        model_id = cast(UUID | None, changes["model_artifact_id"])
+    elif engine_id != source_plan.engine_profile_id:
+        model_id = _clone_model_for_engine(connection, source_plan, engine_id)
+    else:
+        model_id = source_plan.model_artifact_id
+    machine_id = source_plan.machine_profile_id
+    if engine_id != source_plan.engine_profile_id and machine_id is not None:
+        new_engine = RecordRepository(connection, EngineProfile).get(engine_id)
+        if new_engine is not None and new_engine.machine_profile_id not in (None, machine_id):
+            machine_id = None
+
+    workload_repository = RecordRepository(connection, Workload)
+    source_workload = workload_repository.get(source_plan.workload_id)
+    snapshot_workload = source_plan.configuration_snapshot.get("workload")
+    if source_workload is None and isinstance(snapshot_workload, dict):
+        source_workload = Workload.model_validate(snapshot_workload)
+        persisted_source = False
+    else:
+        persisted_source = source_workload is not None
+    workload_changes = {
+        name: value for name, value in changes.items() if name in _CLONE_WORKLOAD_FIELDS
+    }
+    new_workload: Workload | None = None
+    if workload_changes or (source_workload is not None and not persisted_source):
+        if source_workload is None:
+            raise _http_error(
+                409, "benchmark_workload_missing", "The plan workload snapshot is unavailable."
+            )
+        new_workload = _cloned_workload(source_workload, workload_changes, label)
+    workload_id = new_workload.id if new_workload is not None else source_plan.workload_id
+
+    create_body = BenchmarkPlanCreate(
+        name=(body.name or f"{source_plan.name} ({label})")[:160].strip(),
+        engine_profile_id=engine_id,
+        machine_profile_id=machine_id,
+        model_artifact_id=model_id,
+        workload_id=workload_id,
+        retain_prompt_output=source_plan.retain_prompt_output,
+    )
+    timeout_seconds = cast(
+        float, changes.get("request_timeout_seconds", source_plan.timeout_seconds)
+    )
+    with transaction(connection):
+        if new_workload is not None:
+            workload_repository.create(new_workload)
+        preflight = _preflight(
+            create_body,
+            connection=connection,
+            data_directory=cast(Path, request.app.state.data_directory),
+            catalog=catalog,
+        )
+        configuration_snapshot, snapshot_hash = _plan_snapshot(connection, workload_id)
+        configuration_snapshot["prompt_output_retention"] = create_body.retain_prompt_output
+        workload = workload_repository.get(workload_id)
+        plan = BenchmarkPlan(
+            name=create_body.name,
+            status=BenchmarkPlanStatus.READY if preflight.valid else BenchmarkPlanStatus.BLOCKED,
+            machine_profile_id=machine_id,
+            engine_profile_id=engine_id,
+            model_artifact_id=model_id,
+            workload_id=workload_id,
+            warmup_requests=workload.warmup_count if workload is not None else 0,
+            measured_requests=workload.request_count if workload is not None else 1,
+            measurement_duration_seconds=(
+                workload.duration_seconds if workload is not None else None
+            ),
+            concurrency=(
+                max(workload.concurrency_levels)
+                if workload and workload.concurrency_levels
+                else workload.concurrency
+                if workload
+                else 1
+            ),
+            timeout_seconds=timeout_seconds,
+            retain_prompt_output=create_body.retain_prompt_output,
+            dataset_snapshot_hash=snapshot_hash,
+            configuration_snapshot=cast(dict[str, JsonValue], configuration_snapshot),
+        )
+        RecordRepository(connection, BenchmarkPlan).create(plan)
+    return BenchmarkPlanCloneResponse(plan=plan, preflight=preflight, changed_fields=changed_fields)
 
 
 @router.get("/benchmark-plans", response_model=list[BenchmarkPlan], tags=["benchmark-plans"])

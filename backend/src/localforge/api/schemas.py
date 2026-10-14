@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from localforge.adapters.contracts import ProbeResult
 from localforge.core.models import (
     BenchmarkPlan,
     BenchmarkRun,
+    BenchmarkRunStatus,
     CapabilityValue,
     Dataset,
     EngineIntegrationMode,
@@ -19,9 +20,11 @@ from localforge.core.models import (
     JsonValue,
     MachineProfile,
     MetricSample,
+    ModelArtifactStatus,
     PromptSizingMethod,
     ReportFormat,
     ReportMetadata,
+    ReportStatus,
     RequestSample,
     RunEventRecord,
     SchemaModel,
@@ -32,6 +35,7 @@ from localforge.core.models import (
     WorkloadPreset,
 )
 from localforge.core.urls import parse_engine_endpoint
+from localforge.runs import TERMINAL_RUN_STATUSES
 
 ConcurrencyLevel = Annotated[int, Field(ge=1, le=100_000)]
 
@@ -332,3 +336,89 @@ class RunSamplesResponse(SchemaModel):
 
 class RunMetricsResponse(SchemaModel):
     metrics: list[MetricSample] = Field(default_factory=list)
+
+
+class RunCleanupRequest(SchemaModel):
+    before: datetime | None = None
+    statuses: list[BenchmarkRunStatus] | None = Field(default=None, max_length=10)
+    keep_latest: int | None = Field(default=None, ge=0, le=1_000_000)
+    dry_run: bool = True
+
+    @field_validator("statuses")
+    @classmethod
+    def statuses_must_be_terminal(
+        cls, value: list[BenchmarkRunStatus] | None
+    ) -> list[BenchmarkRunStatus] | None:
+        if value is not None and any(item not in TERMINAL_RUN_STATUSES for item in value):
+            raise ValueError("cleanup can select only terminal run statuses")
+        return value
+
+
+class RunCleanupResponse(SchemaModel):
+    run_ids: list[UUID] = Field(default_factory=list)
+    count: int = Field(ge=0)
+    dry_run: bool
+
+
+class BenchmarkPlanCloneChanges(SchemaModel):
+    model_artifact_id: UUID | None = None
+    engine_profile_id: UUID | None = None
+    concurrency: int | None = Field(default=None, ge=1, le=100_000)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
+    temperature: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    warmup_count: int | None = Field(default=None, ge=0, le=100_000)
+    request_count: int | None = Field(default=None, ge=1, le=1_000_000)
+    request_timeout_seconds: float | None = Field(default=None, ge=1, le=3600)
+
+    @model_validator(mode="after")
+    def only_model_and_temperature_accept_null(self) -> "BenchmarkPlanCloneChanges":
+        nullable = {"model_artifact_id", "temperature"}
+        null_fields = sorted(
+            name for name in self.model_fields_set - nullable if getattr(self, name) is None
+        )
+        if null_fields:
+            raise ValueError(f"these changes need a value: {', '.join(null_fields)}")
+        return self
+
+
+class BenchmarkPlanCloneRequest(SchemaModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    changes: BenchmarkPlanCloneChanges = Field(default_factory=BenchmarkPlanCloneChanges)
+
+
+class BenchmarkPlanCloneResponse(BenchmarkPlanResponse):
+    changed_fields: list[str] = Field(default_factory=list)
+
+
+class ReportListItem(SchemaModel):
+    id: UUID
+    created_at: datetime
+    title: str
+    name: str
+    format: ReportFormat
+    status: ReportStatus
+    run_ids: list[UUID]
+    missing_run_ids: list[UUID]
+    size_bytes: int | None
+    available: bool
+    filename: str | None
+    content_included: bool
+    error_message: str | None
+    download_url: str | None
+
+
+class ModelArtifactListItem(SchemaModel):
+    id: UUID
+    model_ref: str | None
+    display_name: str
+    status: ModelArtifactStatus
+    engine_profile_id: UUID | None
+    engine_label: str | None
+    adapter_id: str | None
+    format: str | None
+    quantization: str | None
+    size_bytes: int | None
+    max_context_tokens: int | None
+    revision: str | None
+    tokenizer_identity: str | None
+    updated_at: datetime

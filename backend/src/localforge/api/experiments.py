@@ -13,7 +13,7 @@ from pathlib import Path, PurePath
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
@@ -29,6 +29,7 @@ from localforge.api.schemas import (
     ExperimentStartRequest,
     ReportCreate,
     ReportCreateResponse,
+    ReportListItem,
     RunComparisonRequest,
     RunStartRequest,
 )
@@ -1085,9 +1086,75 @@ def summarize_experiment_group(
     return build_experiment_summary(connection, group)
 
 
-@router.get("/reports", response_model=list[ReportMetadata], tags=["reports"])
-def list_reports(connection: DatabaseConnection) -> list[ReportMetadata]:
-    return RecordRepository(connection, ReportMetadata).list(limit=1000)
+def _report_file(reports_directory: Path, report: ReportMetadata) -> Path | None:
+    """Return the report's own file inside the reports directory, or None when unsafe/missing."""
+
+    if report.status is not ReportStatus.READY or not report.export_ref:
+        return None
+    if report.export_ref != f"reports/{report.id}.{report.format.value}":
+        return None
+    candidate = reports_directory / f"{report.id}.{report.format.value}"
+    if candidate.is_symlink() or candidate.is_junction():
+        return None
+    path = candidate.resolve()
+    if not path.is_relative_to(reports_directory):
+        return None
+    return path
+
+
+def _report_list_item(
+    report: ReportMetadata, reports_directory: Path | None, existing_run_ids: set[str]
+) -> ReportListItem:
+    path = _report_file(reports_directory, report) if reports_directory is not None else None
+    size_bytes: int | None = None
+    if path is not None:
+        try:
+            if path.is_file():
+                size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = None
+    available = size_bytes is not None
+    return ReportListItem(
+        id=report.id,
+        created_at=report.created_at,
+        title=report.name,
+        name=report.name,
+        format=report.format,
+        status=report.status,
+        run_ids=report.run_ids,
+        missing_run_ids=[
+            run_id for run_id in report.run_ids if str(run_id) not in existing_run_ids
+        ],
+        size_bytes=size_bytes,
+        available=available,
+        filename=report.filename,
+        content_included=report.content_included,
+        error_message=report.error_message,
+        download_url=f"/api/v1/reports/{report.id}/download" if available else None,
+    )
+
+
+@router.get("/reports", response_model=list[ReportListItem], tags=["reports"])
+def list_reports(request: Request, connection: DatabaseConnection) -> list[ReportListItem]:
+    """List saved report snapshots newest first; runs deleted later are reported as missing."""
+
+    rows = connection.execute(
+        """SELECT payload_json FROM domain_records
+           WHERE entity_type = ? ORDER BY created_at DESC, id DESC LIMIT 1000""",
+        (ReportMetadata.__name__,),
+    ).fetchall()
+    reports = [ReportMetadata.model_validate(json.loads(row["payload_json"])) for row in rows]
+    existing_run_ids = {
+        str(row["id"])
+        for row in connection.execute(
+            "SELECT id FROM domain_records WHERE entity_type = ?", (BenchmarkRun.__name__,)
+        ).fetchall()
+    }
+    try:
+        _, reports_directory = _report_directory(request)
+    except HTTPException:
+        reports_directory = None
+    return [_report_list_item(report, reports_directory, existing_run_ids) for report in reports]
 
 
 @router.post("/reports", response_model=ReportCreateResponse, status_code=201, tags=["reports"])
@@ -1261,15 +1328,9 @@ def download_report(
     report = RecordRepository(connection, ReportMetadata).get(report_id)
     if report is None or report.status is not ReportStatus.READY or not report.export_ref:
         raise _error(404, "report_file_not_found", "The report file is not available.")
-    data_directory, reports_directory = _report_directory(request)
-    expected_export_ref = f"reports/{report.id}.{report.format.value}"
-    if report.export_ref != expected_export_ref:
-        raise _error(404, "report_file_not_found", "The report file is not available.")
-    target_candidate = reports_directory / f"{report.id}.{report.format.value}"
-    if target_candidate.is_symlink() or target_candidate.is_junction():
-        raise _error(404, "report_file_not_found", "The report file is not available.")
-    path = target_candidate.resolve()
-    if not path.is_relative_to(reports_directory):
+    _, reports_directory = _report_directory(request)
+    path = _report_file(reports_directory, report)
+    if path is None:
         raise _error(404, "report_file_not_found", "The report file is not available.")
     if not path.is_file():
         raise _error(404, "report_file_not_found", "The report file is no longer present.")
@@ -1279,3 +1340,26 @@ def download_report(
         ReportFormat.MARKDOWN: "text/markdown; charset=utf-8",
     }[report.format]
     return FileResponse(path, media_type=media_type, filename=report.filename or path.name)
+
+
+@router.delete("/reports/{report_id}", status_code=204, tags=["reports"])
+def delete_report(
+    report_id: UUID,
+    request: Request,
+    connection: DatabaseConnection,
+) -> Response:
+    """Remove a saved report record and its own export file; runs are not affected."""
+
+    repository = RecordRepository(connection, ReportMetadata)
+    report = repository.get(report_id)
+    if report is None:
+        raise _error(404, "report_not_found", "The report was not found.")
+    try:
+        _, reports_directory = _report_directory(request)
+    except HTTPException:
+        reports_directory = None
+    path = _report_file(reports_directory, report) if reports_directory is not None else None
+    if path is not None:
+        path.unlink(missing_ok=True)
+    repository.delete(report_id)
+    return Response(status_code=204)
