@@ -49,6 +49,7 @@ from localforge.security.local_session import (
 from localforge.storage.database import initialize_database, open_database
 from localforge.storage.paths import default_data_directory
 from localforge.storage.repositories import RecordRepository
+from localforge.web_ui import bundled_ui_directory, mount_browser_ui
 
 MAX_DATASET_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 logger = logging.getLogger(__name__)
@@ -173,6 +174,8 @@ class AppSettings:
     adapter_catalog_factory: Callable[[], AdapterCatalog] = default_adapter_catalog
     session_token_factory: Callable[[], str] = create_local_session_token
     max_dataset_upload_bytes: int = 100 * 1024 * 1024
+    # A built browser UI to serve at "/"; None leaves the UI to the Vite dev server.
+    web_directory: Path | None = None
 
     def __post_init__(self) -> None:
         if self.max_dataset_upload_bytes < 1:
@@ -190,6 +193,7 @@ class AppSettings:
         return cls(
             data_directory=default_data_directory(),
             max_dataset_upload_bytes=maximum_upload_bytes,
+            web_directory=bundled_ui_directory(),
         )
 
 
@@ -425,6 +429,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         DatasetUploadBodyLimitMiddleware,
         max_upload_bytes=app_settings.max_dataset_upload_bytes,
     )
+    if app_settings.web_directory is not None:
+        mount_browser_ui(application, app_settings.web_directory)
 
     return application
 

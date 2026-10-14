@@ -7,6 +7,8 @@ __pycache__/
 
 node_modules/
 dist/
+# Compiled UI copied in by scripts/build_release.py for packaging.
+backend/src/localforge/web/
 coverage/
 playwright-report/
 test-results/
