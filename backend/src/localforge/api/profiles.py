@@ -1,5 +1,6 @@
 """Local system and engine profile routes backed by the caller's SQLite database."""
 
+import json
 import sqlite3
 from typing import cast
 from urllib.parse import urlsplit
@@ -28,9 +29,11 @@ from localforge.api.schemas import (
     EngineProfileView,
     MachineProfileCreate,
     MachineProfilePatch,
+    ModelArtifactListItem,
     ProbeRequest,
     RemoteEgressDisclosure,
 )
+from localforge.comparisons import _find_quantization
 from localforge.core.models import (
     CapabilitySnapshot,
     CapabilitySupport,
@@ -47,6 +50,13 @@ from localforge.core.models import (
     utc_now,
 )
 from localforge.core.urls import endpoint_is_remote
+from localforge.discovery import (
+    DiscoveryResponse,
+    SavedEndpoint,
+    discover_engines,
+    parse_ports,
+)
+from localforge.security.local_session import is_loopback_request_host
 from localforge.storage.repositories import RecordAlreadyExists, RecordRepository
 from localforge.system.inspection import inspect_local_machine
 
@@ -403,6 +413,52 @@ def list_engine_profiles(
     ]
 
 
+@router.get("/engines/discover", response_model=DiscoveryResponse, tags=["engines"])
+async def discover_running_engines(
+    request: Request,
+    catalog: LocalAdapterCatalog,
+    connection: DatabaseConnection,
+    ports: str | None = None,
+) -> DiscoveryResponse:
+    """Scan well-known loopback ports for running engines; read-only and 127.0.0.1 only."""
+
+    if not is_loopback_request_host(request.url.hostname):
+        raise _http_error(
+            403, "loopback_only", "Engine discovery is available only through a loopback host."
+        )
+    try:
+        port_list = parse_ports(ports)
+    except ValueError as error:
+        raise _http_error(422, "invalid_ports", str(error)) from error
+
+    self_ports: set[int] = set()
+    server = request.scope.get("server")
+    if isinstance(server, (tuple, list)) and len(server) == 2 and isinstance(server[1], int):
+        self_ports.add(server[1])
+    if request.url.port is not None:
+        self_ports.add(request.url.port)
+    implemented = {
+        manifest.adapter_id: manifest.display_name
+        for manifest in catalog.list_manifests()
+        if manifest.implementation_status == "implemented"
+    }
+    saved = [
+        SavedEndpoint(
+            profile_id=profile.id,
+            adapter_id=profile.adapter_id,
+            endpoint_url=profile.endpoint_url,
+        )
+        for profile in RecordRepository(connection, EngineProfile).list(limit=1000)
+    ]
+    return await discover_engines(
+        implemented_adapters=implemented,
+        saved_endpoints=saved,
+        ports=port_list,
+        self_ports=self_ports,
+        transport=getattr(request.app.state, "engine_discovery_transport", None),
+    )
+
+
 @router.post("/engines", response_model=EngineProfileView, status_code=201, tags=["engines"])
 def create_engine_profile(
     body: EngineProfileCreate,
@@ -529,6 +585,65 @@ def update_engine_profile(
     updated = _validate_engine_profile(merged)
     saved = RecordRepository(connection, EngineProfile).update(updated)
     return _engine_profile_view(connection, saved)
+
+
+def _quantization_label(artifact: ModelArtifact) -> str | None:
+    value = _find_quantization(cast(JsonValue, artifact.engine_extensions))
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
+@router.get("/models", response_model=list[ModelArtifactListItem], tags=["models"])
+def list_all_models(connection: DatabaseConnection) -> list[ModelArtifactListItem]:
+    """List every saved model artifact with its owning engine, sorted by engine then model."""
+
+    rows = connection.execute(
+        "SELECT payload_json FROM domain_records WHERE entity_type = ?",
+        (ModelArtifact.__name__,),
+    ).fetchall()
+    artifacts = [ModelArtifact.model_validate(json.loads(row["payload_json"])) for row in rows]
+    engines = {
+        profile.id: profile
+        for profile in RecordRepository(connection, EngineProfile).list(limit=1000)
+    }
+    items: list[ModelArtifactListItem] = []
+    for artifact in artifacts:
+        engine = (
+            engines.get(artifact.engine_profile_id)
+            if artifact.engine_profile_id is not None
+            else None
+        )
+        items.append(
+            ModelArtifactListItem(
+                id=artifact.id,
+                model_ref=artifact.model_ref,
+                display_name=artifact.display_name,
+                status=artifact.status,
+                engine_profile_id=artifact.engine_profile_id,
+                engine_label=engine.label if engine is not None else None,
+                adapter_id=engine.adapter_id if engine is not None else None,
+                format=artifact.format,
+                quantization=_quantization_label(artifact),
+                size_bytes=artifact.size_bytes,
+                max_context_tokens=artifact.max_context_tokens,
+                revision=artifact.revision,
+                tokenizer_identity=artifact.tokenizer_identity,
+                updated_at=artifact.updated_at,
+            )
+        )
+    items.sort(
+        key=lambda item: (
+            item.engine_label is None,
+            (item.engine_label or "").casefold(),
+            item.model_ref is None,
+            (item.model_ref or "").casefold(),
+            str(item.id),
+        )
+    )
+    return items
 
 
 @router.get("/engines/{profile_id}/models", response_model=list[ModelArtifact], tags=["engines"])
@@ -748,11 +863,15 @@ async def start_engine_profile(
             "binary, model, and server settings.",
         ) from error
     except ValueError as error:
+        # Adapter validation messages are fixed, user-facing text naming the failing setting.
+        reason = str(error).strip()
         raise _http_error(
             409,
             "managed_start_invalid",
-            "The adapter rejected the saved launch settings. Check the selected binary, model, "
-            "working directory, endpoint, and tuning values.",
+            f"The adapter rejected the saved launch settings: {reason}"
+            if reason
+            else "The adapter rejected the saved launch settings. Check the selected binary, "
+            "model, working directory, endpoint, and tuning values.",
         ) from error
     except OSError as error:
         message = (

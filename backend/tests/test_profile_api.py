@@ -566,6 +566,30 @@ def test_llama_managed_routes_forward_saved_endpoint_and_extension_configuration
             )
             assert not processes[-1].terminated
 
+            missing_model = client.post(
+                "/api/v1/engines",
+                json={
+                    "label": "Managed llama missing model",
+                    "adapter_id": LLAMA_CPP_ADAPTER_ID,
+                    "integration_mode": "managed_process",
+                    "endpoint_url": "http://127.0.0.1:9933",
+                    "engine_extensions": {
+                        "llama_cpp": {
+                            "executable_path": str(executable),
+                            "model_path": str(tmp_path / "absent.gguf"),
+                        }
+                    },
+                },
+            )
+            assert missing_model.status_code == 201, missing_model.text
+            rejected = client.post(f"/api/v1/engines/{missing_model.json()['id']}/start")
+            assert rejected.status_code == 409
+            assert rejected.json()["detail"]["code"] == "managed_start_invalid"
+            # The adapter's reason reaches the user instead of a generic checklist.
+            assert (
+                "Select an existing local .gguf model file." in rejected.json()["detail"]["message"]
+            )
+
         assert len(catalogs) == 1
         assert processes[0].terminated
         assert processes[1].terminated
