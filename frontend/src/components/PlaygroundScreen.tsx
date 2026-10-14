@@ -10,6 +10,7 @@ import {
   type EngineProfile,
   type PlaygroundStreamEvent,
 } from "../lib/api";
+import { engineIdFromHash } from "../lib/engine-onboarding";
 
 type ModelChoice = {
   profile: EngineProfile;
@@ -27,6 +28,13 @@ function remoteHost(profile: EngineProfile | null): string {
   }
 }
 
+/** First ready model of the engine named by "#playground?engine=<id>"; unknown ids are ignored. */
+function deepLinkedChoice(choices: ModelChoice[]): ModelChoice | null {
+  const id = engineIdFromHash(window.location.hash, "playground");
+  if (!id) return null;
+  return choices.find(({ profile }) => profile.id === id) ?? null;
+}
+
 export function PlaygroundScreen() {
   const [choices, setChoices] = useState<ModelChoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +44,9 @@ export function PlaygroundScreen() {
   const [maxTokens, setMaxTokens] = useState(512);
   const [confirmRemote, setConfirmRemote] = useState(false);
   const [output, setOutput] = useState("");
-  const [usage, setUsage] = useState<Extract<PlaygroundStreamEvent, { type: "usage" }> | null>(null);
+  const [usage, setUsage] = useState<Extract<PlaygroundStreamEvent, { type: "usage" }> | null>(
+    null,
+  );
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [streamState, setStreamState] = useState<StreamState>("idle");
   const [streamError, setStreamError] = useState("");
@@ -78,17 +88,21 @@ export function PlaygroundScreen() {
               profile,
               model,
               cancellationMayContinue:
-                manifests.get(profile.adapter_id)?.declared_capabilities.includes("cancellation") !==
-                  true ||
+                manifests
+                  .get(profile.adapter_id)
+                  ?.declared_capabilities.includes("cancellation") !== true ||
                 profile.capabilities?.cancellation?.state !== "supported",
             })),
         );
         if (!active) return;
         setChoices(nextChoices);
+        const linked = deepLinkedChoice(nextChoices);
         setSelection((current) =>
-          nextChoices.some(({ model }) => model.id === current)
-            ? current
-            : (nextChoices[0]?.model.id ?? ""),
+          linked
+            ? linked.model.id
+            : nextChoices.some(({ model }) => model.id === current)
+              ? current
+              : (nextChoices[0]?.model.id ?? ""),
         );
       } catch (error) {
         if (!active) return;
@@ -104,12 +118,26 @@ export function PlaygroundScreen() {
     };
   }, []);
 
+  // "#playground?engine=<id>" (from an Engines card) selects that engine's first ready model.
+  useEffect(() => {
+    const onHashChange = () => {
+      const linked = deepLinkedChoice(choices);
+      if (linked) {
+        setSelection(linked.model.id);
+        setConfirmRemote(false);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [choices]);
+
   const choice = useMemo(
     () => choices.find(({ model }) => model.id === selection) ?? null,
     [choices, selection],
   );
   const needsRemoteConfirmation = Boolean(choice?.profile.is_remote);
-  const profileAllowsRemote = !needsRemoteConfirmation || choice?.profile.remote_access_enabled === true;
+  const profileAllowsRemote =
+    !needsRemoteConfirmation || choice?.profile.remote_access_enabled === true;
   const canSend =
     Boolean(choice) &&
     Boolean(prompt.trim()) &&
@@ -182,19 +210,30 @@ export function PlaygroundScreen() {
         </div>
 
         {loading ? (
-          <p className="playground-empty" role="status">Loading connected engines and models…</p>
+          <p className="playground-empty" role="status">
+            Loading connected engines and models…
+          </p>
         ) : loadError ? (
           <div className="notice notice--warning" role="alert">
-            {loadError} <button className="button button--secondary" onClick={() => window.location.reload()} type="button">Retry</button>
+            {loadError}{" "}
+            <button
+              className="button button--secondary"
+              onClick={() => window.location.reload()}
+              type="button"
+            >
+              Retry
+            </button>
           </div>
         ) : !usableChoices ? (
           <div className="playground-empty">
             <h3>No ready inference models</h3>
             <p>
-              Add an engine in LOCALFORGE, probe its connection, select an available model, and enable
-              the profile. Test fixtures do not run real models.
+              Add an engine in LOCALFORGE, probe its connection, select an available model, and
+              enable the profile. Test fixtures do not run real models.
             </p>
-            <a className="button button--primary" href="#engines">Set up an engine</a>
+            <a className="button button--primary" href="#engines">
+              Set up an engine
+            </a>
           </div>
         ) : (
           <form className="playground-form" onSubmit={submit}>
@@ -220,8 +259,8 @@ export function PlaygroundScreen() {
             {needsRemoteConfirmation && (
               <div className="playground-remote-notice">
                 <p>
-                  This model is hosted at <strong>{remoteHost(choice?.profile ?? null)}</strong>. The
-                  prompt and generated response will leave this machine.
+                  This model is hosted at <strong>{remoteHost(choice?.profile ?? null)}</strong>.
+                  The prompt and generated response will leave this machine.
                 </p>
                 {profileAllowsRemote ? (
                   <label className="playground-check">
@@ -234,7 +273,8 @@ export function PlaygroundScreen() {
                   </label>
                 ) : (
                   <p>
-                    Remote use is not enabled for this profile. <a href="#engines">Review its connection settings</a>.
+                    Remote use is not enabled for this profile.{" "}
+                    <a href="#engines">Review its connection settings</a>.
                   </p>
                 )}
               </div>
@@ -254,7 +294,10 @@ export function PlaygroundScreen() {
               />
             </label>
             <div className="playground-controls">
-              <label className="playground-field playground-token-field" htmlFor="playground-max-tokens">
+              <label
+                className="playground-field playground-token-field"
+                htmlFor="playground-max-tokens"
+              >
                 <span>Maximum response</span>
                 <select
                   id="playground-max-tokens"
@@ -263,13 +306,17 @@ export function PlaygroundScreen() {
                   onChange={(event) => setMaxTokens(Number(event.target.value))}
                 >
                   {[256, 512, 1024, 2048].map((value) => (
-                    <option key={value} value={value}>{value} tokens</option>
+                    <option key={value} value={value}>
+                      {value} tokens
+                    </option>
                   ))}
                 </select>
               </label>
               <div className="playground-actions">
                 {streamState === "streaming" ? (
-                  <button className="button button--secondary" onClick={stop} type="button">Stop output</button>
+                  <button className="button button--secondary" onClick={stop} type="button">
+                    Stop output
+                  </button>
                 ) : (
                   <button className="button button--primary" disabled={!canSend} type="submit">
                     Send prompt
@@ -279,12 +326,13 @@ export function PlaygroundScreen() {
             </div>
             {choice?.cancellationMayContinue && (
               <p className="playground-cancellation-note">
-                Stopping closes LOCALFORGE’s output stream. This engine may continue generating on its
-                side.
+                Stopping closes LOCALFORGE’s output stream. This engine may continue generating on
+                its side.
               </p>
             )}
             <p className="playground-privacy">
-              LOCALFORGE does not save prompt history. This prompt and response remain in this screen until you leave or reload it.
+              LOCALFORGE does not save prompt history. This prompt and response remain in this
+              screen until you leave or reload it.
             </p>
           </form>
         )}
@@ -297,16 +345,32 @@ export function PlaygroundScreen() {
               <p className="eyebrow">MODEL OUTPUT</p>
               <h2 id="playground-response-title">Response</h2>
             </div>
-            {streamState === "streaming" && <span className="playground-stream-status" role="status">Generating…</span>}
+            {streamState === "streaming" && (
+              <span className="playground-stream-status" role="status">
+                Generating…
+              </span>
+            )}
           </div>
-          <div className="playground-output" aria-live="polite" aria-busy={streamState === "streaming"}>
-            {output ? <pre>{output}</pre> : (
+          <div
+            className="playground-output"
+            aria-live="polite"
+            aria-busy={streamState === "streaming"}
+          >
+            {output ? (
+              <pre>{output}</pre>
+            ) : (
               <p className="playground-output-placeholder">
-                {streamState === "streaming" ? "Waiting for the first tokens…" : "Your model’s response will appear here."}
+                {streamState === "streaming"
+                  ? "Waiting for the first tokens…"
+                  : "Your model’s response will appear here."}
               </p>
             )}
           </div>
-          {streamError && <p className="playground-error" role="alert">{streamError}</p>}
+          {streamError && (
+            <p className="playground-error" role="alert">
+              {streamError}
+            </p>
+          )}
           {streamState === "cancelled" && (
             <p className="playground-muted" role="status">
               {choice?.cancellationMayContinue
@@ -317,8 +381,12 @@ export function PlaygroundScreen() {
           {(elapsedMs !== null || usage) && (
             <div className="playground-metadata" aria-label="Response details">
               {elapsedMs !== null && <span>{(elapsedMs / 1000).toFixed(2)} s</span>}
-              {usage?.input_tokens !== null && usage?.input_tokens !== undefined && <span>{usage.input_tokens} input tokens</span>}
-              {usage?.output_tokens !== null && usage?.output_tokens !== undefined && <span>{usage.output_tokens} output tokens</span>}
+              {usage?.input_tokens !== null && usage?.input_tokens !== undefined && (
+                <span>{usage.input_tokens} input tokens</span>
+              )}
+              {usage?.output_tokens !== null && usage?.output_tokens !== undefined && (
+                <span>{usage.output_tokens} output tokens</span>
+              )}
               {usage && !usage.exact && <span>Token counts estimated</span>}
             </div>
           )}

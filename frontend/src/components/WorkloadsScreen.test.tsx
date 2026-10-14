@@ -255,6 +255,27 @@ describe("workload builder and plan review", () => {
     expect(startBenchmarkRun).toHaveBeenCalledWith("plan-1", false);
   });
 
+  it("shows the request timeout from Settings next to Save plan", async () => {
+    vi.mocked(fetchWorkspaceSettings).mockResolvedValue(
+      workspaceSettings({ default_request_timeout_seconds: 45 }),
+    );
+    vi.mocked(createBenchmarkPlan).mockResolvedValue({
+      ...planResponse,
+      plan: { ...planResponse.plan, timeout_seconds: 45 },
+    });
+    render(<WorkloadsScreen />);
+    await chooseReadyTarget();
+    fireEvent.click(screen.getByRole("button", { name: "Review preflight" }));
+    await screen.findByRole("heading", { name: "Preflight review" });
+    expect(screen.getByText(/Each request times out after 45 s/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "#settings");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save plan" }));
+    expect(
+      await screen.findByText("Each request times out after 45 s (saved with this plan)."),
+    ).toBeInTheDocument();
+  });
+
   it("sends an open-loop rate with its in-flight concurrency and shows server warnings", async () => {
     vi.mocked(createWorkload).mockResolvedValue({
       ...workload,
@@ -491,5 +512,39 @@ describe("workload builder and plan review", () => {
     await chooseReadyTarget();
 
     expect(screen.getByLabelText("Engine profile")).toHaveValue(engine.id);
+  });
+
+  it("preselects the engine named in a #workloads?engine= deep link, with its first model", async () => {
+    const secondEngine: EngineProfile = { ...engine, id: "engine-2", label: "Second engine" };
+    const secondModel: EngineModel = {
+      ...model,
+      id: "model-2",
+      engine_profile_id: "engine-2",
+      display_name: "Second model",
+    };
+    vi.mocked(listEngineProfiles).mockResolvedValue([engine, secondEngine]);
+    vi.mocked(listEngineModels).mockImplementation(async (id) =>
+      id === "engine-2" ? [secondModel] : [model],
+    );
+    window.location.hash = "#workloads?engine=engine-2";
+    try {
+      render(<WorkloadsScreen />);
+      await waitFor(() => expect(screen.getByLabelText("Engine profile")).toHaveValue("engine-2"));
+      await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue("model-2"));
+      expect(listEngineModels).toHaveBeenCalledWith("engine-2");
+    } finally {
+      window.location.hash = "";
+    }
+  });
+
+  it("ignores a deep link to an unknown engine", async () => {
+    window.location.hash = "#workloads?engine=missing-engine";
+    try {
+      render(<WorkloadsScreen />);
+      await chooseReadyTarget();
+      expect(screen.getByLabelText("Engine profile")).toHaveValue(engine.id);
+    } finally {
+      window.location.hash = "";
+    }
   });
 });

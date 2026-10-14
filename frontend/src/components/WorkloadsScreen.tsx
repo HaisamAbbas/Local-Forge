@@ -28,6 +28,8 @@ import {
   type WorkloadInput,
   type WorkspaceSettingsResponse,
 } from "../lib/api";
+import { engineIdFromHash } from "../lib/engine-onboarding";
+import { visibleEngines } from "../lib/test-fixtures";
 
 type ScreenData = {
   engines: EngineProfile[];
@@ -176,11 +178,14 @@ async function fetchScreenData(): Promise<ScreenData> {
 
 /** Engines offered for new plans; test fixtures stay hidden unless Settings enables them. */
 function plannableEngines(data: ScreenData | null): EngineProfile[] {
-  if (!data) return [];
-  const settings = data.settings;
-  if (!settings || settings.settings.show_test_fixture_engines) return data.engines;
-  const fixtures = new Set(settings.test_fixture_adapter_ids);
-  return data.engines.filter((engine) => !fixtures.has(engine.adapter_id));
+  return data ? visibleEngines(data.engines, data.settings) : [];
+}
+
+/** The plannable engine named by a "#workloads?engine=<id>" deep link; unknown ids are ignored. */
+function deepLinkedEngine(data: ScreenData | null): EngineProfile | null {
+  const id = engineIdFromHash(window.location.hash, "workloads");
+  if (!id) return null;
+  return plannableEngines(data).find((engine) => engine.id === id) ?? null;
 }
 
 function withSettingsDefaults(
@@ -255,9 +260,11 @@ export function WorkloadsScreen() {
       (result) => {
         if (!active) return;
         setData(result);
+        const linkedEngine = deepLinkedEngine(result);
         const firstEngine = plannableEngines(result)[0];
         setForm((current) => {
           const withDefaults = withSettingsDefaults(current, result.settings);
+          if (linkedEngine) return { ...withDefaults, engineId: linkedEngine.id, modelId: "" };
           return withDefaults.engineId || !firstEngine
             ? withDefaults
             : { ...withDefaults, engineId: firstEngine.id };
@@ -271,6 +278,21 @@ export function WorkloadsScreen() {
       active = false;
     };
   }, []);
+
+  // "#workloads?engine=<id>" (from an Engines card) preselects that engine while on this screen.
+  useEffect(() => {
+    const onHashChange = () => {
+      const linked = deepLinkedEngine(data);
+      if (linked)
+        setForm((current) =>
+          current.engineId === linked.id
+            ? current
+            : { ...current, engineId: linked.id, modelId: "" },
+        );
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [data]);
 
   const selectedEngine = useMemo(
     () => data?.engines.find((engine) => engine.id === form.engineId) ?? null,
@@ -1624,12 +1646,46 @@ export function WorkloadsScreen() {
                     Plan status: {activePlan?.status ?? "unknown"}. A blocked plan cannot launch.
                   </span>
                 )}
+                <RequestTimeoutHint
+                  savedTimeoutSeconds={savedPlan ? (activePlan?.timeout_seconds ?? null) : null}
+                  settings={data?.settings ?? null}
+                />
               </div>
             </>
           )}
         </section>
       )}
     </div>
+  );
+}
+
+/** The per-request timeout a plan gets: the saved plan's value, else the workspace default. */
+function RequestTimeoutHint({
+  savedTimeoutSeconds,
+  settings,
+}: {
+  savedTimeoutSeconds: number | null;
+  settings: WorkspaceSettingsResponse | null;
+}) {
+  if (savedTimeoutSeconds !== null)
+    return (
+      <span className="workload-action-hint workload-timeout-hint">
+        Each request times out after {savedTimeoutSeconds} s (saved with this plan).
+      </span>
+    );
+  return (
+    <span className="workload-action-hint workload-timeout-hint">
+      {settings ? (
+        <>
+          Each request times out after {settings.settings.default_request_timeout_seconds} s (
+          <a href="#settings">Settings</a>).
+        </>
+      ) : (
+        <>
+          Each request uses the workspace default timeout (<a href="#settings">Settings</a>).
+        </>
+      )}
+    </span>
   );
 }
 

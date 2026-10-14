@@ -14,11 +14,14 @@ import {
   ApiError,
   createEngineProfile,
   deleteEngineProfile,
+  enableEngineProfile,
   fetchSystemProfile,
+  listBenchmarkPlans,
   listEngineCatalog,
   listEngineModels,
   listEngineProfiles,
   listMachineProfiles,
+  listRunMetrics,
   listRuns,
   probeEngineProfile,
   saveCurrentMachineProfile,
@@ -28,6 +31,7 @@ import {
   type AcceleratorDetails,
   type AdapterManifest,
   type AdapterModel,
+  type BenchmarkRun,
   type CapabilityValue,
   type EngineModel,
   type EngineMode,
@@ -35,8 +39,31 @@ import {
   type EngineProfileInput,
   type HardwareDetails,
   type MachineProfile,
+  type DiscoveredEngine,
+  type EngineRecommendation,
   type ProbeResult,
 } from "../lib/api";
+import { probeOutcome, probeProblem } from "../lib/engine-onboarding";
+import {
+  scanStatusMessage,
+  useEngineDiscovery,
+  type CandidateAddState,
+} from "../lib/engine-discovery";
+import { EngineDiscoveryPanel, EngineSetupChecklist } from "./EngineOnboarding";
+import { EngineRecommendations } from "./EngineRecommendations";
+import { recommendationProfileLabel, type AddOutcome } from "../lib/engine-recommendations";
+import { formatValue, integerTicks, linearScale } from "../lib/chart-scale";
+import { findRunMetric } from "../lib/run-measurements";
+import { useChartCursor, useMeasuredWidth } from "./charts/chart-hooks";
+import {
+  BottomAxis,
+  ChartFigure,
+  ChartTooltip,
+  CursorAnnouncement,
+  LeftAxisLabel,
+  ValueGrid,
+  type PlotBox,
+} from "./charts/ChartParts";
 
 type Resource<T> =
   { status: "loading" } | { status: "error"; message: string } | { status: "ready"; value: T };
@@ -433,14 +460,354 @@ function labelToField(label: string): string {
   );
 }
 
+const TREND_RUN_LIMIT = 20;
+const TREND_FETCH_CONCURRENCY = 4;
+const TREND_BOX: PlotBox = { left: 58, right: 18, top: 16, bottom: 44 };
+
+type TrendRun = {
+  runId: string;
+  position: number;
+  planName: string;
+  completedAt: string | null;
+  ttft: { value: number; unit: string } | null;
+  throughput: { value: number; unit: string } | null;
+  metricsError: boolean;
+};
+
+type TrendState = { status: "loading" } | { status: "ready"; runs: TrendRun[] };
+
+/** Run `task` over `items` with at most `limit` requests in flight; failures stay per item. */
+async function settleWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T) => Promise<R>,
+): Promise<Array<PromiseSettledResult<R>>> {
+  const results: Array<PromiseSettledResult<R>> = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = { status: "fulfilled", value: await task(items[index]!) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+function completedTime(run: BenchmarkRun): number {
+  const time = new Date(run.completed_at ?? run.updated_at).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function measuredValue(
+  record: { value: number | null; unit: string } | null,
+  fallbackUnit: string,
+): { value: number; unit: string } | null {
+  if (!record || record.value === null || !Number.isFinite(record.value)) return null;
+  return { value: record.value, unit: record.unit || fallbackUnit };
+}
+
+/** The last completed runs (oldest first) with their TTFT p50 and generation throughput. */
+function useRunTrend(runs: BenchmarkRun[] | null): TrendState {
+  const recent = useMemo(
+    () =>
+      (runs ?? [])
+        .filter((run) => run.status === "completed")
+        .sort((left, right) => completedTime(right) - completedTime(left))
+        .slice(0, TREND_RUN_LIMIT)
+        .reverse(),
+    [runs],
+  );
+  const [loaded, setLoaded] = useState<{ source: BenchmarkRun[]; runs: TrendRun[] } | null>(null);
+  useEffect(() => {
+    if (recent.length === 0) return;
+    let active = true;
+    void (async () => {
+      const [plans, metrics] = await Promise.all([
+        listBenchmarkPlans().catch(() => []),
+        settleWithLimit(recent, TREND_FETCH_CONCURRENCY, (run) => listRunMetrics(run.id)),
+      ]);
+      if (!active) return;
+      const planNames = new Map(plans.map((plan) => [plan.id, plan.name]));
+      setLoaded({
+        source: recent,
+        runs: recent.map((run, index) => {
+          const result = metrics[index];
+          const records = result?.status === "fulfilled" ? result.value.metrics : [];
+          return {
+            runId: run.id,
+            position: index + 1,
+            planName: planNames.get(run.plan_id) ?? `Plan ${run.plan_id.slice(0, 8)}`,
+            completedAt: run.completed_at,
+            ttft: measuredValue(findRunMetric(records, "ttft_ms", "p50"), "ms"),
+            throughput: measuredValue(
+              findRunMetric(records, "generation_throughput_tokens_per_second", "run_rate"),
+              "tokens/s",
+            ),
+            metricsError: result?.status !== "fulfilled",
+          };
+        }),
+      });
+    })();
+    return () => {
+      active = false;
+    };
+  }, [recent]);
+  if (!runs) return { status: "loading" };
+  if (recent.length === 0) return { status: "ready", runs: [] };
+  return loaded?.source === recent ? { status: "ready", runs: loaded.runs } : { status: "loading" };
+}
+
+function runHref(runId: string): string {
+  return `#runs?run=${encodeURIComponent(runId)}`;
+}
+
+/**
+ * One metric across recent completed runs. X is the run's position in completion order
+ * (shared by both trend panels so they line up); runs without the metric leave a gap.
+ */
+function RunTrendPlot({
+  runs,
+  pick,
+  label,
+  yLabel,
+  height = 170,
+}: {
+  runs: TrendRun[];
+  pick: (run: TrendRun) => { value: number; unit: string } | null;
+  label: string;
+  yLabel: string;
+  height?: number;
+}) {
+  const { ref, width: measured } = useMeasuredWidth<HTMLDivElement>(420);
+  const width = Math.max(280, measured);
+  const total = runs.length;
+  const points = runs.flatMap((run) => {
+    const value = pick(run);
+    return value ? [{ run, value: value.value, unit: value.unit }] : [];
+  });
+  const plotLeft = TREND_BOX.left;
+  const plotRight = width - TREND_BOX.right;
+  const xMap = (position: number) =>
+    total <= 1
+      ? (plotLeft + plotRight) / 2
+      : plotLeft + ((position - 1) / (total - 1)) * (plotRight - plotLeft);
+  const y = linearScale(
+    points.map((point) => point.value),
+    [height - TREND_BOX.bottom, TREND_BOX.top],
+    { zeroBased: true, tickCount: 3 },
+  );
+  const xs = points.map((point) => xMap(point.run.position));
+  const { active, svgProps } = useChartCursor(xs, "x", width);
+  const activePoint = active === null ? null : points[active];
+  if (points.length === 0) {
+    return (
+      <p className="chart-no-data" role="status">
+        None of these runs recorded {label}.
+      </p>
+    );
+  }
+  const readout = activePoint
+    ? [
+        activePoint.run.planName,
+        `${label}: ${formatValue(activePoint.value, activePoint.unit)}`,
+        `Run ${activePoint.run.runId.slice(0, 8)} · ${formatDate(activePoint.run.completedAt)}`,
+      ]
+    : null;
+  const linePath = points
+    .map(
+      (point, index) =>
+        `${index === 0 ? "M" : "L"}${xMap(point.run.position)},${y.map(point.value)}`,
+    )
+    .join(" ");
+  const openActive = () => {
+    if (activePoint) window.location.assign(runHref(activePoint.run.runId));
+  };
+  return (
+    <div className="lf-chart__plot" ref={ref}>
+      <svg
+        aria-label={`${label} for ${points.length} recent completed runs. Use arrow keys to read values and Enter to open a run.`}
+        className="lf-chart__svg overview-trend__svg"
+        height={height}
+        role="img"
+        viewBox={`0 0 ${width} ${height}`}
+        width={width}
+        {...svgProps}
+        onClick={openActive}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && activePoint) {
+            event.preventDefault();
+            openActive();
+            return;
+          }
+          svgProps.onKeyDown(event);
+        }}
+      >
+        <ValueGrid ticks={y.ticks} map={y.map} box={TREND_BOX} width={width} />
+        <BottomAxis
+          box={TREND_BOX}
+          height={height}
+          label="Completed runs, oldest to newest"
+          map={xMap}
+          ticks={integerTicks(1, total, 6)}
+          width={width}
+          format={(value) => `#${value}`}
+        />
+        <LeftAxisLabel box={TREND_BOX} height={height} label={yLabel} />
+        {points.length > 1 && <path className="lf-chart__line" d={linePath} />}
+        {activePoint && (
+          <line
+            className="lf-chart__crosshair"
+            x1={xMap(activePoint.run.position)}
+            x2={xMap(activePoint.run.position)}
+            y1={TREND_BOX.top}
+            y2={height - TREND_BOX.bottom}
+          />
+        )}
+        {points.map((point, index) => (
+          <circle
+            className={index === active ? "lf-chart__dot is-active" : "lf-chart__dot"}
+            cx={xMap(point.run.position)}
+            cy={y.map(point.value)}
+            key={point.run.runId}
+            r={index === active ? 5 : 3.5}
+          />
+        ))}
+        {activePoint && readout && (
+          <ChartTooltip
+            height={height}
+            lines={readout}
+            width={width}
+            x={xMap(activePoint.run.position)}
+            y={y.map(activePoint.value)}
+          />
+        )}
+      </svg>
+      <CursorAnnouncement text={readout ? readout.join(", ") : null} />
+    </div>
+  );
+}
+
+function skippedSummary(
+  runs: TrendRun[],
+  label: string,
+  pick: (run: TrendRun) => unknown,
+): string | null {
+  const skipped = runs.filter((run) => !run.metricsError && !pick(run));
+  if (skipped.length === 0) return null;
+  const names = skipped.map((run) => run.planName).join(", ");
+  return `${skipped.length} ${skipped.length === 1 ? "run" : "runs"} skipped for ${label} (not recorded): ${names}.`;
+}
+
+const pickTtft = (run: TrendRun) => run.ttft;
+const pickThroughput = (run: TrendRun) => run.throughput;
+
+function trendCell(run: TrendRun, value: { value: number; unit: string } | null): string {
+  if (run.metricsError) return "Could not load";
+  return value ? formatValue(value.value, value.unit) : "Not recorded";
+}
+
+function RunTrend({ state }: { state: TrendState }) {
+  if (state.status === "loading") {
+    return (
+      <p role="status" aria-busy="true">
+        Loading recent run measurements…
+      </p>
+    );
+  }
+  const runs = state.runs;
+  const failed = runs.filter((run) => run.metricsError).length;
+  const notes = [
+    skippedSummary(runs, "TTFT p50", pickTtft),
+    skippedSummary(runs, "generation throughput", pickThroughput),
+    failed
+      ? `Measurements for ${failed} ${failed === 1 ? "run" : "runs"} could not be loaded and are not shown.`
+      : null,
+  ].filter((note): note is string => Boolean(note));
+  return (
+    <ChartFigure
+      id="overview-trend"
+      title="Throughput and latency trend"
+      headingLevel={3}
+      subtitle={`Last ${runs.length} completed ${runs.length === 1 ? "run" : "runs"}. Hover or use arrow keys to see each plan; click or press Enter to open the run.`}
+      empty={
+        runs.length === 0 ? "No completed runs yet. Completed runs will be charted here." : null
+      }
+      caption={
+        <>
+          TTFT p50 is the median time to first token in each run; generation throughput is the
+          run-rate decode throughput at the lowest recorded load level.
+          {notes.map((note) => (
+            <span className="overview-trend__note" key={note}>
+              {" "}
+              {note}
+            </span>
+          ))}
+        </>
+      }
+      table={{
+        caption: "Recent completed runs, oldest first",
+        columns: ["Run", "Completed", "TTFT p50", "Generation throughput"],
+        rows: runs.map((run) => ({
+          key: run.runId,
+          cells: [
+            <a href={runHref(run.runId)} key="link">
+              {run.planName} · {run.runId.slice(0, 8)}
+            </a>,
+            formatDate(run.completedAt),
+            trendCell(run, run.ttft),
+            trendCell(run, run.throughput),
+          ],
+        })),
+      }}
+    >
+      <div className="lf-chart-grid lf-chart-grid--compact overview-trend">
+        <div>
+          <h4 className="lf-chart-group-title">Time to first token (p50)</h4>
+          <RunTrendPlot label="TTFT p50" pick={pickTtft} runs={runs} yLabel="ms" />
+        </div>
+        <div>
+          <h4 className="lf-chart-group-title">Generation throughput</h4>
+          <RunTrendPlot
+            label="generation throughput"
+            pick={pickThroughput}
+            runs={runs}
+            yLabel="tokens/s"
+          />
+        </div>
+      </div>
+    </ChartFigure>
+  );
+}
+
 export function OverviewScreen() {
   const machines = useResource(fetchSystemProfile);
   const runs = useResource(listRuns);
   const engines = useResource(listEngineProfiles);
   const machine = machines.resource.status === "ready" ? machines.resource.value : null;
   const latestRun = runs.resource.status === "ready" ? runs.resource.value[0] : null;
+  const trend = useRunTrend(runs.resource.status === "ready" ? runs.resource.value : null);
+  // Recommendations lead the page until the first engine profile exists. The placement is fixed
+  // once profiles load, so adding an engine from the list does not move the list under the user.
+  const [recommendationsPlacement, setRecommendationsPlacement] = useState<"top" | "lower" | null>(
+    null,
+  );
+  if (recommendationsPlacement === null && engines.resource.status !== "loading") {
+    setRecommendationsPlacement(
+      engines.resource.status === "ready" && engines.resource.value.length === 0 ? "top" : "lower",
+    );
+  }
+  const reloadEngines = engines.reload;
   return (
     <div className="screen-stack">
+      {recommendationsPlacement === "top" && (
+        <EngineRecommendations onAdded={() => void reloadEngines()} />
+      )}
       <section className="welcome-panel overview-intro" aria-labelledby="welcome-title">
         <div className="welcome-heading">
           <div className="welcome-copy">
@@ -564,6 +931,20 @@ export function OverviewScreen() {
           </section>
         </div>
       </section>
+      {runs.resource.status === "ready" && runs.resource.value.length > 0 && (
+        <section className="panel overview-trend-panel" aria-label="Recent run trend">
+          <div className="section-title-row">
+            <p className="eyebrow">RECENT RESULTS</p>
+            <a className="text-link" href="#runs">
+              Run history
+            </a>
+          </div>
+          <RunTrend state={trend} />
+        </section>
+      )}
+      {recommendationsPlacement === "lower" && (
+        <EngineRecommendations compact onAdded={() => void reloadEngines()} />
+      )}
       {machine && (
         <section className="panel" aria-labelledby="overview-machine-title">
           <div className="section-title-row">
@@ -782,9 +1163,39 @@ const blankEngineForm: EngineFormValues = {
   user_notes: "",
 };
 
+/** Where each engine listens when started with its documented defaults on this machine. */
+const DEFAULT_LOCAL_ENDPOINTS: Record<string, string> = {
+  "localforge.llama_cpp": "http://127.0.0.1:8080",
+  "localforge.ollama": "http://127.0.0.1:11434",
+  "localforge.openai_compatible": "http://127.0.0.1:8000/v1",
+  "localforge.vllm": "http://127.0.0.1:8000",
+  "localforge.sglang": "http://127.0.0.1:30000",
+  "localforge.lmdeploy": "http://127.0.0.1:23333",
+  "localforge.lightllm": "http://127.0.0.1:8000",
+  "localforge.tensorrt_llm": "http://127.0.0.1:8000",
+  "localforge.tgi": "http://127.0.0.1:8080",
+  "localforge.localai": "http://127.0.0.1:8080",
+  "localforge.koboldcpp": "http://127.0.0.1:5001",
+  "localforge.mistral_rs": "http://127.0.0.1:1234",
+  "localforge.mlc_llm": "http://127.0.0.1:8000",
+  "localforge.mlx_lm": "http://127.0.0.1:8080",
+  "localforge.nvidia_dynamo": "http://127.0.0.1:8000",
+};
+
+/** Port LOCALFORGE binds when it launches llama-server itself, clear of a running instance. */
+const MANAGED_LLAMA_CPP_ENDPOINT = "http://127.0.0.1:9931";
+
+function defaultEndpointFor(adapterId: string, mode: string): string {
+  if (adapterId === "localforge.llama_cpp" && mode === "managed_process") {
+    return MANAGED_LLAMA_CPP_ENDPOINT;
+  }
+  return DEFAULT_LOCAL_ENDPOINTS[adapterId] ?? "";
+}
+
 function EngineProfileDialog({
   manifest,
   initial,
+  initialMode,
   busy,
   error,
   onClose,
@@ -792,6 +1203,8 @@ function EngineProfileDialog({
 }: {
   manifest: AdapterManifest;
   initial?: EngineProfile;
+  /** Connection mode preselected for a new profile, when the adapter supports it. */
+  initialMode?: EngineMode | null;
   busy: boolean;
   error: string;
   onClose: () => void;
@@ -819,6 +1232,10 @@ function EngineProfileDialog({
     const value = savedExtension[key];
     return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
   };
+  const newProfileMode =
+    initialMode && manifest.integration_modes.includes(initialMode)
+      ? initialMode
+      : (manifest.integration_modes[0] ?? "");
   const [values, setValues] = useState<EngineFormValues>(() =>
     initial
       ? {
@@ -854,8 +1271,9 @@ function EngineProfileDialog({
         }
       : {
           ...blankEngineForm,
-          integration_mode: manifest.integration_modes[0] ?? "",
-          endpoint_url: isOllama ? "http://127.0.0.1:11434" : blankEngineForm.endpoint_url,
+          label: `${manifest.display_name} on this machine`.slice(0, 120),
+          integration_mode: newProfileMode,
+          endpoint_url: defaultEndpointFor(manifest.adapter_id, newProfileMode),
         },
   );
   const [adapterSettings, setAdapterSettings] = useState<Record<string, string>>(() =>
@@ -878,6 +1296,9 @@ function EngineProfileDialog({
   const setField = <K extends keyof EngineFormValues>(key: K, value: EngineFormValues[K]) =>
     setValues((current) => ({ ...current, [key]: value }));
   const remote = isRemoteEndpoint(values.endpoint_url);
+  const showEndpointHint =
+    values.endpoint_url !== "" &&
+    values.endpoint_url === defaultEndpointFor(manifest.adapter_id, values.integration_mode);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1229,7 +1650,20 @@ function EngineProfileDialog({
           <label>
             Connection mode
             <select
-              onChange={(event) => setField("integration_mode", event.target.value as EngineMode)}
+              onChange={(event) => {
+                const mode = event.target.value as EngineMode;
+                setValues((current) => ({
+                  ...current,
+                  integration_mode: mode,
+                  // Follow the mode's usual address unless the user typed their own.
+                  endpoint_url:
+                    current.endpoint_url.trim() === "" ||
+                    current.endpoint_url ===
+                      defaultEndpointFor(manifest.adapter_id, current.integration_mode)
+                      ? defaultEndpointFor(manifest.adapter_id, mode)
+                      : current.endpoint_url,
+                }));
+              }}
               required
               value={values.integration_mode}
             >
@@ -1242,37 +1676,39 @@ function EngineProfileDialog({
             </select>
           </label>
           {!isLibraryPipeline && (
-            <label>
-              {isOpenAiCompatible
-                ? "API base URL"
-                : isOllama
-                  ? "Ollama local server URL"
-                  : isLlamaCpp && values.integration_mode === "managed_process"
-                    ? "Local bind URL"
-                    : isLlamaCpp
-                      ? "llama-server endpoint URL"
-                      : "Endpoint URL"}{" "}
-              {!isOpenAiCompatible && !isLlamaCpp && !isOllama && (
-                <span className="optional-label">Optional</span>
-              )}
-              <input
-                autoComplete="url"
-                maxLength={1000}
-                onChange={(event) => setField("endpoint_url", event.target.value)}
-                placeholder={
-                  isOpenAiCompatible
-                    ? "http://127.0.0.1:8000/v1"
-                    : isOllama
-                      ? "http://127.0.0.1:11434"
+            <>
+              <label>
+                {isOpenAiCompatible
+                  ? "API base URL"
+                  : isOllama
+                    ? "Ollama local server URL"
+                    : isLlamaCpp && values.integration_mode === "managed_process"
+                      ? "Local bind URL"
                       : isLlamaCpp
-                        ? "http://127.0.0.1:9931"
-                        : "http://127.0.0.1:8000"
-                }
-                required={isOpenAiCompatible || isLlamaCpp || isOllama}
-                type="url"
-                value={values.endpoint_url}
-              />
-            </label>
+                        ? "llama-server endpoint URL"
+                        : "Endpoint URL"}{" "}
+                {!isOpenAiCompatible && !isLlamaCpp && !isOllama && (
+                  <span className="optional-label">Optional</span>
+                )}
+                <input
+                  aria-describedby={showEndpointHint ? "engine-endpoint-hint" : undefined}
+                  autoComplete="url"
+                  maxLength={1000}
+                  onChange={(event) => setField("endpoint_url", event.target.value)}
+                  placeholder="http://127.0.0.1:8080"
+                  required={isOpenAiCompatible || isLlamaCpp || isOllama}
+                  type="url"
+                  value={values.endpoint_url}
+                />
+              </label>
+              {showEndpointHint && (
+                <small className="table-subtext" id="engine-endpoint-hint">
+                  {isLlamaCpp && values.integration_mode === "managed_process"
+                    ? "LOCALFORGE starts llama-server on this address. Change the port if it is in use."
+                    : `The usual address when ${manifest.display_name} runs on this machine. Change it if you started the server on another port or host.`}
+                </small>
+              )}
+            </>
           )}
           <label>
             Engine display name <span className="optional-label">Optional</span>
@@ -1955,7 +2391,16 @@ export function EnginesScreen() {
   const [dialogError, setDialogError] = useState("");
   const [actionError, setActionError] = useState("");
   const [busyProfile, setBusyProfile] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<"start" | "stop" | "probe" | "enable" | null>(null);
   const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
+  // Why the latest probe of a profile failed, shown on its card until a probe succeeds.
+  const [probeProblems, setProbeProblems] = useState<Record<string, string>>({});
+  const [setupMessage, setSetupMessage] = useState("");
+  const discovery = useEngineDiscovery();
+  const [addedByEndpoint, setAddedByEndpoint] = useState<Record<string, string>>({});
+  const [candidateAddStates, setCandidateAddStates] = useState<Record<string, CandidateAddState>>(
+    {},
+  );
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [modelData, setModelData] = useState<
     Record<
@@ -1969,6 +2414,11 @@ export function EnginesScreen() {
     message: string;
   } | null>(null);
   const [removePrompt, setRemovePrompt] = useState<EngineProfile | null>(null);
+  // Mode preselected when the Add dialog opens from a recommendation ("Add as managed").
+  const [newProfileMode, setNewProfileMode] = useState<EngineMode | null>(null);
+  useEffect(() => {
+    if (!editing) setNewProfileMode(null);
+  }, [editing]);
 
   const manifestById = useMemo(
     () =>
@@ -2003,11 +2453,14 @@ export function EnginesScreen() {
           patch.engine_extensions = input.engine_extensions;
         if (input.secret_refs !== undefined) patch.secret_refs = input.secret_refs;
         await updateEngineProfile(editing.id, patch);
+        setEditing(null);
+        await profiles.reload();
       } else {
-        await createEngineProfile(input);
+        const created = await createEngineProfile(input);
+        setEditing(null);
+        await profiles.reload();
+        await setUpNewProfile(created);
       }
-      setEditing(null);
-      await profiles.reload();
     } catch (error) {
       setDialogError(error instanceof Error ? error.message : "Could not save the engine profile.");
     } finally {
@@ -2015,23 +2468,131 @@ export function EnginesScreen() {
     }
   };
 
-  const probe = async (id: string, confirmRemote = false) => {
+  /**
+   * After a new profile is saved: an attached local endpoint is probed and, if the probe
+   * succeeds, enabled. Managed servers are never started automatically; remote endpoints wait
+   * for the user's explicit probe because probing them sends data off this machine.
+   */
+  const setUpNewProfile = async (created: EngineProfile): Promise<boolean> => {
+    if (created.integration_mode === "managed_process") {
+      setSetupMessage(`Added ${created.label}. Next step: start its server.`);
+      return false;
+    }
+    if (created.integration_mode !== "attached_endpoint" || created.is_remote) {
+      setSetupMessage(`Added ${created.label}. Next step: probe it.`);
+      return false;
+    }
+    setSetupMessage(`Added ${created.label}. Probing it now…`);
+    const result = await probe(created.id, false, created);
+    if (result?.status !== "succeeded") {
+      setSetupMessage(`Added ${created.label}, but its probe found a problem. It stays disabled.`);
+      return false;
+    }
+    setSetupMessage(`Probe succeeded. Enabling ${created.label}…`);
+    if (await enable(created.id)) {
+      setSetupMessage(`${created.label} is ready. Try it in the Playground or benchmark it.`);
+      return true;
+    }
+    setSetupMessage(`${created.label} was probed but could not be enabled.`);
+    return false;
+  };
+
+  /** One-click add from the recommendations list, through the same create → probe → enable path. */
+  const addRecommended = async (item: EngineRecommendation): Promise<AddOutcome> => {
+    if (!item.endpoint_url) throw new Error(`No local endpoint is known for ${item.display_name}.`);
+    const created = await createEngineProfile({
+      label: recommendationProfileLabel(item),
+      adapter_id: item.adapter_id,
+      engine_display_name: null,
+      integration_mode: "attached_endpoint",
+      endpoint_url: item.endpoint_url,
+      user_notes: null,
+    });
+    setAddedByEndpoint((current) => ({ ...current, [item.endpoint_url!]: created.id }));
+    await profiles.reload();
+    const ready = await setUpNewProfile(created);
+    return {
+      profileId: created.id,
+      ready,
+      message: ready
+        ? `${created.label} is ready. Benchmark it to measure it on this machine.`
+        : `Added ${created.label}. Finish its setup in the engine profiles below.`,
+    };
+  };
+
+  const openManagedDialog = (item: EngineRecommendation) => {
+    setDialogError("");
+    setSelectedAdapterId(item.adapter_id);
+    setNewProfileMode("managed_process");
+    setEditing("new");
+  };
+
+  const addCandidate = async (candidate: DiscoveredEngine) => {
+    const key = candidate.endpoint_url;
+    setCandidateAddStates((current) => ({ ...current, [key]: { status: "adding" } }));
+    try {
+      const created = await createEngineProfile({
+        label: `${candidate.display_name} on this machine`,
+        adapter_id: candidate.adapter_id,
+        engine_display_name: null,
+        integration_mode: "attached_endpoint",
+        endpoint_url: candidate.endpoint_url,
+        user_notes: null,
+      });
+      setAddedByEndpoint((current) => ({ ...current, [key]: created.id }));
+      setCandidateAddStates((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      await profiles.reload();
+      await setUpNewProfile(created);
+    } catch (error) {
+      setCandidateAddStates((current) => ({
+        ...current,
+        [key]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "Could not add this engine.",
+        },
+      }));
+    }
+  };
+
+  const showProfile = (id: string) => {
+    const card = document.getElementById(`engine-profile-${id}`);
+    card?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    card?.querySelector<HTMLElement>("h3")?.focus();
+  };
+
+  const probe = async (
+    id: string,
+    confirmRemote = false,
+    known?: EngineProfile,
+  ): Promise<ProbeResult | null> => {
     const profile =
-      profiles.resource.status === "ready"
+      known ??
+      (profiles.resource.status === "ready"
         ? profiles.resource.value.find((item) => item.id === id)
-        : undefined;
+        : undefined);
     const manifest = profile ? manifestById.get(profile.adapter_id) : undefined;
     if (profile?.is_remote && manifest?.category === "test_fixture") {
       setActionError(
         `${manifest.display_name} is a local test fixture and does not contact ${profile.endpoint_url}. It cannot verify a remote endpoint; use a network-capable adapter to probe that host.`,
       );
-      return;
+      return null;
     }
     setBusyProfile(id);
+    setBusyAction("probe");
     setActionError("");
     try {
       const response = await probeEngineProfile(id, confirmRemote);
       setProbeResults((current) => ({ ...current, [id]: response.result }));
+      setProbeProblems((current) => {
+        const next = { ...current };
+        if (response.result.status === "failed") next[id] = probeProblem(response.result);
+        else delete next[id];
+        return next;
+      });
       setRemotePrompt(null);
       setExpanded((current) => ({ ...current, [id]: true }));
       setModelData((current) => ({ ...current, [id]: { loading: true } }));
@@ -2048,6 +2609,7 @@ export function EnginesScreen() {
           },
         }));
       }
+      return response.result;
     } catch (error) {
       if (error instanceof ApiError && error.code === "remote_confirmation_required") {
         setRemotePrompt({
@@ -2056,17 +2618,37 @@ export function EnginesScreen() {
           message: error.message,
         });
       } else {
-        setActionError(
-          error instanceof Error ? error.message : "The probe could not be completed.",
-        );
+        const message =
+          error instanceof Error ? error.message : "The probe could not be completed.";
+        setProbeProblems((current) => ({ ...current, [id]: message }));
       }
+      return null;
     } finally {
       setBusyProfile(null);
+      setBusyAction(null);
+    }
+  };
+
+  const enable = async (id: string): Promise<boolean> => {
+    setBusyProfile(id);
+    setBusyAction("enable");
+    setActionError("");
+    try {
+      await enableEngineProfile(id);
+      await profiles.reload();
+      return true;
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not enable this engine.");
+      return false;
+    } finally {
+      setBusyProfile(null);
+      setBusyAction(null);
     }
   };
 
   const toggleManagedProcess = async (profile: EngineProfile) => {
     setBusyProfile(profile.id);
+    setBusyAction(profile.managed_process_running ? "stop" : "start");
     setActionError("");
     try {
       if (profile.managed_process_running) await stopEngineProfile(profile.id);
@@ -2078,6 +2660,7 @@ export function EnginesScreen() {
       );
     } finally {
       setBusyProfile(null);
+      setBusyAction(null);
     }
   };
 
@@ -2121,8 +2704,25 @@ export function EnginesScreen() {
       (manifest) =>
         manifest.implementation_status === "implemented" && manifest.category !== "test_fixture",
     ) ?? availableManifests.find((manifest) => manifest.implementation_status === "implemented");
+  const openAddDialog = () => {
+    setDialogError("");
+    setSelectedAdapterId(defaultNewManifest?.adapter_id ?? "");
+    setEditing("new");
+  };
+  // The empty state leads with its own scan button, so the header one is hidden there.
+  const showHeaderScan = !(
+    profiles.resource.status === "ready" && profiles.resource.value.length === 0
+  );
   return (
     <div className="screen-stack">
+      <EngineRecommendations
+        canAddManaged={(adapterId) =>
+          manifestById.get(adapterId)?.integration_modes.includes("managed_process") ?? false
+        }
+        collapseStorageKey="localforge.engines.recommendationsCollapsed"
+        onAdd={addRecommended}
+        onAddManaged={openManagedDialog}
+      />
       <div className="engine-workbench">
         <section className="panel engine-catalog-panel" aria-labelledby="engine-catalog-title">
           <div className="section-title-row">
@@ -2300,19 +2900,49 @@ export function EnginesScreen() {
                 Local servers and user-selected endpoints, in one place.
               </p>
             </div>
-            <button
-              className="button button--quiet"
-              onClick={() => void profiles.reload()}
-              type="button"
-            >
-              Refresh
-            </button>
+            <div className="engine-profiles-actions">
+              {showHeaderScan && (
+                <button
+                  className="button button--secondary"
+                  disabled={discovery.state.status === "scanning"}
+                  onClick={() => void discovery.scan()}
+                  type="button"
+                >
+                  {discovery.state.status === "scanning" ? "Scanning…" : "Scan this machine"}
+                </button>
+              )}
+              <button
+                className="button button--quiet"
+                onClick={() => void profiles.reload()}
+                type="button"
+              >
+                Refresh
+              </button>
+            </div>
           </div>
+          <p className="visually-hidden" role="status" aria-live="polite">
+            {scanStatusMessage(discovery.state)}
+          </p>
+          <p className="engine-setup-message" role="status" aria-live="polite">
+            {setupMessage}
+          </p>
           {actionError && (
             <p className="form-error" role="alert">
               {actionError}
             </p>
           )}
+          <EngineDiscoveryPanel
+            state={discovery.state}
+            manifests={manifestById}
+            profiles={profiles.resource.status === "ready" ? profiles.resource.value : []}
+            addedByEndpoint={addedByEndpoint}
+            addStates={candidateAddStates}
+            onAdd={(candidate) => void addCandidate(candidate)}
+            onAddManually={openAddDialog}
+            onDismiss={discovery.dismiss}
+            onScan={() => void discovery.scan()}
+            onShowProfile={showProfile}
+          />
           <ResourcePanel
             resource={profiles.resource}
             onRetry={() => void profiles.reload()}
@@ -2329,19 +2959,28 @@ export function EnginesScreen() {
                     <p>
                       <strong>No engine profiles are configured.</strong>
                     </p>
-                    <p>Connect a local runtime or a user-selected endpoint to begin testing.</p>
-                    <button
-                      className="button button--primary"
-                      disabled={!defaultNewManifest}
-                      onClick={() => {
-                        setDialogError("");
-                        setSelectedAdapterId(defaultNewManifest?.adapter_id ?? "");
-                        setEditing("new");
-                      }}
-                      type="button"
-                    >
-                      Add your first engine
-                    </button>
+                    <p>
+                      Already running Ollama, llama.cpp or another engine server? Scan this computer
+                      (127.0.0.1 only) to find it and add it in one click.
+                    </p>
+                    <div className="engine-profile-empty-actions">
+                      <button
+                        className="button button--primary"
+                        disabled={discovery.state.status === "scanning"}
+                        onClick={() => void discovery.scan()}
+                        type="button"
+                      >
+                        {discovery.state.status === "scanning" ? "Scanning…" : "Scan this machine"}
+                      </button>
+                      <button
+                        className="button button--quiet"
+                        disabled={!defaultNewManifest}
+                        onClick={openAddDialog}
+                        type="button"
+                      >
+                        Add manually
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -2351,12 +2990,30 @@ export function EnginesScreen() {
                     const probeResult = probeResults[profile.id];
                     const savedCapabilities = profile.capabilities;
                     const modelsState = modelData[profile.id];
+                    const managed = profile.integration_mode === "managed_process";
+                    const serverStopped = managed && !profile.managed_process_running;
+                    const probeSucceeded = probeOutcome(profile, probeResult) === "succeeded";
+                    const probeBlockedReason = manifest
+                      ? serverStopped
+                        ? "Start the local server before probing it."
+                        : undefined
+                      : "This adapter is not installed. Reinstall it to probe this profile.";
+                    const isBusy = busyProfile === profile.id;
+                    const problem =
+                      probeProblems[profile.id] ??
+                      (profile.status === "needs_attention" && !probeResult
+                        ? "The latest probe found a problem. Check that the engine is running, then probe again."
+                        : undefined);
                     return (
-                      <article className="engine-profile-card" key={profile.id}>
+                      <article
+                        className="engine-profile-card"
+                        id={`engine-profile-${profile.id}`}
+                        key={profile.id}
+                      >
                         <div className="engine-profile-header">
                           <div>
                             <div className="profile-name-row">
-                              <h3>{profile.label}</h3>
+                              <h3 tabIndex={-1}>{profile.label}</h3>
                               <span className={`status-pill status-pill--${profile.status}`}>
                                 {statusLabel(profile.status)}
                               </span>
@@ -2369,53 +3026,32 @@ export function EnginesScreen() {
                             </p>
                           </div>
                           <div className="engine-actions">
-                            {profile.integration_mode === "managed_process" && (
+                            {/* Incomplete setup steps (start, first probe, enable) are actions in
+                                the checklist below; the header keeps the repeat actions. */}
+                            {managed && profile.managed_process_running && (
                               <button
-                                className={
-                                  profile.managed_process_running
-                                    ? "button button--danger-quiet"
-                                    : "button button--primary"
-                                }
-                                disabled={!manifest || busyProfile === profile.id}
+                                className="button button--danger-quiet"
+                                disabled={!manifest || isBusy}
                                 onClick={() => void toggleManagedProcess(profile)}
                                 type="button"
                               >
-                                {busyProfile === profile.id
-                                  ? profile.managed_process_running
-                                    ? "Stopping…"
-                                    : "Starting…"
-                                  : profile.managed_process_running
-                                    ? "Stop server"
-                                    : "Start server"}
+                                {isBusy && busyAction === "stop" ? "Stopping…" : "Stop server"}
+                              </button>
+                            )}
+                            {probeSucceeded && (
+                              <button
+                                className="button button--quiet"
+                                disabled={!manifest || isBusy || serverStopped}
+                                title={probeBlockedReason}
+                                onClick={() => void probe(profile.id)}
+                                type="button"
+                              >
+                                {isBusy && busyAction === "probe" ? "Probing…" : "Probe"}
                               </button>
                             )}
                             <button
                               className="button button--quiet"
-                              disabled={
-                                !manifest ||
-                                busyProfile === profile.id ||
-                                (profile.integration_mode === "managed_process" &&
-                                  !profile.managed_process_running)
-                              }
-                              title={
-                                manifest
-                                  ? profile.integration_mode === "managed_process" &&
-                                    !profile.managed_process_running
-                                    ? "Start the local server before probing it."
-                                    : undefined
-                                  : "This adapter is not installed. Reinstall it to probe this profile."
-                              }
-                              onClick={() => void probe(profile.id)}
-                              type="button"
-                            >
-                              {busyProfile === profile.id ? "Probing…" : "Probe"}
-                            </button>
-                            <button
-                              className="button button--quiet"
-                              disabled={
-                                profile.integration_mode === "managed_process" &&
-                                !profile.managed_process_running
-                              }
+                              disabled={serverStopped}
                               onClick={() => void inspect(profile.id)}
                               type="button"
                             >
@@ -2423,11 +3059,7 @@ export function EnginesScreen() {
                             </button>
                             <button
                               className="button button--quiet"
-                              disabled={
-                                !manifest ||
-                                busyProfile === profile.id ||
-                                profile.managed_process_running
-                              }
+                              disabled={!manifest || isBusy || profile.managed_process_running}
                               title={
                                 manifest
                                   ? undefined
@@ -2443,9 +3075,7 @@ export function EnginesScreen() {
                             </button>
                             <button
                               className="button button--danger-quiet"
-                              disabled={
-                                busyProfile === profile.id || profile.managed_process_running
-                              }
+                              disabled={isBusy || profile.managed_process_running}
                               onClick={() => setRemovePrompt(profile)}
                               type="button"
                             >
@@ -2457,6 +3087,25 @@ export function EnginesScreen() {
                           <p className="inline-warning" role="status">
                             Adapter {profile.adapter_id} is not installed. Probing and editing are
                             unavailable; this profile can still be removed.
+                          </p>
+                        )}
+                        <EngineSetupChecklist
+                          profile={profile}
+                          probeResult={probeResult}
+                          busy={isBusy || !manifest}
+                          busyAction={
+                            isBusy && busyAction && busyAction !== "stop" ? busyAction : null
+                          }
+                          canProbe={Boolean(manifest) && !serverStopped}
+                          probeBlockedReason={probeBlockedReason}
+                          onStart={() => void toggleManagedProcess(profile)}
+                          onProbe={() => void probe(profile.id)}
+                          onEnable={() => void enable(profile.id)}
+                        />
+                        {problem && (
+                          <p className="inline-warning engine-probe-problem" role="alert">
+                            <strong>Probe problem:</strong> {problem} This engine stays disabled
+                            until a probe succeeds.
                           </p>
                         )}
                         <dl className="profile-attributes">
@@ -2574,6 +3223,7 @@ export function EnginesScreen() {
           busy={saving}
           error={dialogError}
           initial={editing === "new" ? undefined : editing}
+          initialMode={editing === "new" ? newProfileMode : null}
           manifest={manifestById.get(editing === "new" ? selectedAdapterId : editing.adapter_id)!}
           onClose={() => setEditing(null)}
           onSubmit={(input) => void save(input)}

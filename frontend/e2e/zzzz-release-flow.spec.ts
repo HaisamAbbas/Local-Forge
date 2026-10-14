@@ -17,7 +17,8 @@ async function registerAndEnableFakeEngine(page: Page, profileName: string): Pro
   const profile = page
     .locator(".engine-profile-card")
     .filter({ has: page.getByRole("heading", { name: profileName }) });
-  await profile.getByRole("button", { name: "Probe" }).click();
+  // Saving a new attached profile probes and enables it automatically.
+  await expect(profile.locator(".status-pill")).toHaveText("Enabled");
   await expect(page.getByRole("heading", { name: "Models reported by this probe" })).toBeVisible();
 
   await page.goto("/#workloads");
@@ -29,7 +30,6 @@ async function registerAndEnableFakeEngine(page: Page, profileName: string): Pro
   if (!profileId) throw new Error(`The registered fake engine ${profileName} is unavailable.`);
 
   await page.getByLabel("Engine profile").selectOption(profileId);
-  await page.getByRole("button", { name: "Enable this probed engine" }).click();
   await expect(page.getByText("This engine has been probed but is disabled.")).toHaveCount(0);
   return profileId;
 }

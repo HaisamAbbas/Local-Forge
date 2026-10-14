@@ -31,6 +31,11 @@ test("registers, probes, edits and removes a fake engine from the UI", async ({ 
   await expect(profileCard).toBeVisible();
   await expect(profileCard.getByText("Not configured").first()).toBeVisible();
 
+  // Saving probes and enables the new attached profile; Probe then re-checks it on demand.
+  await expect(profileCard.locator(".status-pill")).toHaveText("Enabled");
+  await expect(
+    profileCard.getByRole("list", { name: "Next steps for Browser test engine" }),
+  ).toContainText("Enabled");
   const probeButton = profileCard.getByRole("button", { name: "Probe" });
   await probeButton.focus();
   await page.keyboard.press("Enter");

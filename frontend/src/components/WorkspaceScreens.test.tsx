@@ -5,20 +5,35 @@ import {
   ApiError,
   createEngineProfile,
   deleteEngineProfile,
+  discoverEngines,
+  enableEngineProfile,
+  fetchEngineRecommendations,
+  listBenchmarkPlans,
   listEngineCatalog,
   listEngineModels,
   listEngineProfiles,
   listMachineProfiles,
+  listRunMetrics,
+  listRuns,
   probeEngineProfile,
   startEngineProfile,
   stopEngineProfile,
   updateEngineProfile,
   type AcceleratorDetails,
   type AdapterManifest,
+  type BenchmarkPlan,
+  type BenchmarkRun,
+  type EngineDiscoveryResult,
   type EngineProfile,
+  type EngineRecommendationsResult,
   type HardwareDetails,
+  type MetricSample,
   type ProbeResponse,
 } from "../lib/api";
+import {
+  recommendationFixture,
+  recommendationsFixture,
+} from "../lib/engine-recommendations-fixture";
 import { EnginesScreen, OverviewScreen, SystemScreen } from "./WorkspaceScreens";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -27,7 +42,12 @@ vi.mock("../lib/api", async (importOriginal) => {
     ...actual,
     createEngineProfile: vi.fn(),
     deleteEngineProfile: vi.fn(),
+    discoverEngines: vi.fn(),
+    enableEngineProfile: vi.fn(),
+    fetchEngineRecommendations: vi.fn(),
     fetchSystemProfile: vi.fn(),
+    listBenchmarkPlans: vi.fn(),
+    listRunMetrics: vi.fn(),
     listEngineCatalog: vi.fn(),
     listEngineModels: vi.fn(),
     listEngineProfiles: vi.fn(),
@@ -213,7 +233,32 @@ const probeFixture: ProbeResponse = {
   },
 };
 
+const emptyRecommendations: EngineRecommendationsResult = {
+  generated_at: "2026-01-01T00:00:00Z",
+  method: "Ranked by hardware fit and what is installed; not a speed measurement.",
+  machine: {
+    summary: "Windows · 8 logical cores · 8 GB memory",
+    os: "Windows",
+    arch: "AMD64",
+    cpu_model: "Test CPU",
+    cpu_logical_cores: 8,
+    cpu_physical_cores: 4,
+    memory_total_bytes: 8 * 1024 ** 3,
+    accelerators: [],
+    cpu_features: { avx2: true, avx512: null },
+  },
+  model_size_guidance: {
+    basis: "system_memory",
+    memory_budget_bytes: 4 * 1024 ** 3,
+    comfortable_params_billion_q4: 3,
+    max_params_billion_q4: 7,
+    text: "Models up to about 3B parameters (Q4) should run comfortably.",
+  },
+  recommendations: [],
+};
+
 beforeEach(() => {
+  vi.mocked(fetchEngineRecommendations).mockResolvedValue(emptyRecommendations);
   vi.mocked(listEngineCatalog).mockResolvedValue([catalogFixture]);
   vi.mocked(listEngineProfiles).mockResolvedValue([]);
   vi.mocked(listMachineProfiles).mockResolvedValue([]);
@@ -930,7 +975,7 @@ describe("add engine default", () => {
     expect(within(dialog).getByText(/^llama\.cpp \/ llama-server:/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Close dialog" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Add your first engine" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
     expect(
       within(screen.getByRole("dialog", { name: "Add an engine" })).getByText(
         /^llama\.cpp \/ llama-server:/,
@@ -980,5 +1025,590 @@ describe("system accelerator details", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Physical cores")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
+  });
+});
+
+function runFixture(id: string, overrides: Partial<BenchmarkRun> = {}): BenchmarkRun {
+  return {
+    id,
+    plan_id: `plan-${id}`,
+    status: "completed",
+    worker_id: null,
+    potentially_contended: false,
+    started_at: "2026-01-01T00:00:00Z",
+    completed_at: "2026-01-01T00:01:00Z",
+    error_code: null,
+    error_message: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:01:00Z",
+    ...overrides,
+  };
+}
+
+function metricFixture(
+  runId: string,
+  metricName: string,
+  aggregation: string,
+  value: number,
+  unit: string,
+): MetricSample {
+  return {
+    id: `${runId}-${metricName}-${aggregation}`,
+    run_id: runId,
+    metric_name: metricName,
+    value,
+    unit,
+    source: "client_measured",
+    aggregation,
+    sample_count: 10,
+    definition: "",
+    formula: "",
+    method_version: "1",
+    quality_flags: [],
+    metric_kind: "gauge",
+    adapter_id: null,
+    adapter_version: null,
+    engine_version: null,
+    observed_at: "2026-01-01T00:01:00Z",
+    labels: {},
+  };
+}
+
+describe("overview run trend", () => {
+  it("charts TTFT p50 and generation throughput for completed runs and names skipped runs", async () => {
+    const { fetchSystemProfile } = await import("../lib/api");
+    vi.mocked(fetchSystemProfile).mockResolvedValue(machineFixture);
+    vi.mocked(listRuns).mockResolvedValue([
+      runFixture("run-newest-0000", { completed_at: "2026-01-03T00:00:00Z" }),
+      runFixture("run-failed-0000", { status: "failed", completed_at: "2026-01-04T00:00:00Z" }),
+      runFixture("run-oldest-0000", { completed_at: "2026-01-02T00:00:00Z" }),
+    ]);
+    vi.mocked(listBenchmarkPlans).mockResolvedValue([
+      { id: "plan-run-newest-0000", name: "Newest plan" } as BenchmarkPlan,
+      { id: "plan-run-oldest-0000", name: "Oldest plan" } as BenchmarkPlan,
+    ]);
+    vi.mocked(listRunMetrics).mockImplementation(async (id) => ({
+      metrics:
+        id === "run-newest-0000"
+          ? [metricFixture(id, "ttft_ms", "p50", 120, "ms")]
+          : [
+              metricFixture(id, "ttft_ms", "p50", 95, "ms"),
+              metricFixture(
+                id,
+                "generation_throughput_tokens_per_second",
+                "run_rate",
+                42.5,
+                "tokens/s",
+              ),
+            ],
+    }));
+
+    render(<OverviewScreen />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Throughput and latency trend" }),
+    ).toBeInTheDocument();
+    expect(listRunMetrics).toHaveBeenCalledTimes(2);
+    expect(listRunMetrics).not.toHaveBeenCalledWith("run-failed-0000");
+    expect(
+      screen.getByText(/1 run skipped for generation throughput \(not recorded\): Newest plan\./),
+    ).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows[0]).toHaveTextContent(/Oldest plan.*95 ms.*42\.5 tokens\/s/);
+    expect(rows[1]).toHaveTextContent(/Newest plan.*120 ms.*Not recorded/);
+    expect(screen.getByRole("link", { name: /Newest plan · run-newe/ })).toHaveAttribute(
+      "href",
+      "#runs?run=run-newest-0000",
+    );
+    expect(
+      screen.getByRole("img", { name: /TTFT p50 for 2 recent completed runs/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: /generation throughput for 1 recent completed runs/ }),
+    ).toBeInTheDocument();
+  });
+});
+
+function failedProbe(message: string): ProbeResponse {
+  return {
+    profile: engineFixture({ status: "needs_attention", last_probed_at: "2026-01-01T00:00:00Z" }),
+    result: {
+      ...probeFixture.result,
+      status: "failed",
+      reachable: { state: "unsupported", details: null, source: "probe" },
+      diagnostics: [{ code: "connection_refused", message, severity: "error", retryable: true }],
+    },
+  };
+}
+
+function checklistFor(label = "Fixture profile") {
+  return screen.getByRole("list", { name: `Next steps for ${label}` });
+}
+
+describe("engine setup checklist", () => {
+  it("walks from probe to enable to Playground and Benchmark links", async () => {
+    let profile = engineFixture();
+    vi.mocked(listEngineProfiles).mockImplementation(async () => [profile]);
+    vi.mocked(probeEngineProfile).mockImplementation(async () => {
+      profile = engineFixture({ last_probed_at: "2026-01-01T00:00:00Z" });
+      return probeFixture;
+    });
+    vi.mocked(enableEngineProfile).mockImplementation(async () => {
+      profile = engineFixture({ status: "enabled", last_probed_at: "2026-01-01T00:00:00Z" });
+      return profile;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByRole("heading", { name: "Fixture profile" });
+    let checklist = checklistFor();
+    expect(within(checklist).getByText("✓ Added")).toBeInTheDocument();
+    const probeButton = within(checklist).getByRole("button", { name: "Probe" });
+    expect(probeButton.closest("li")).toHaveAttribute("aria-current", "step");
+    expect(probeButton).toHaveClass("button--primary");
+    expect(within(checklist).getByRole("button", { name: "Enable" })).toBeDisabled();
+    expect(within(checklist).queryByRole("link")).not.toBeInTheDocument();
+
+    fireEvent.click(probeButton);
+    await waitFor(() =>
+      expect(within(checklistFor()).getByRole("button", { name: "Enable" })).toBeEnabled(),
+    );
+    checklist = checklistFor();
+    expect(within(checklist).getByText(/✓ Probed/)).toBeInTheDocument();
+    expect(within(checklist).getByRole("button", { name: "Enable" }).closest("li")).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    // Only one enable prompt: the old separate notice is folded into the checklist.
+    expect(screen.queryByText(/This engine is still disabled/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(checklist).getByRole("button", { name: "Enable" }));
+    await waitFor(() => expect(within(checklistFor()).getByText("✓ Enabled")).toBeInTheDocument());
+    checklist = checklistFor();
+    expect(within(checklist).getByRole("link", { name: "Try in Playground" })).toHaveAttribute(
+      "href",
+      "#playground?engine=profile-1",
+    );
+    const benchmark = within(checklist).getByRole("link", { name: "Benchmark" });
+    expect(benchmark).toHaveAttribute("href", "#workloads?engine=profile-1");
+    expect(benchmark.closest("li")).toHaveAttribute("aria-current", "step");
+    expect(enableEngineProfile).toHaveBeenCalledWith("profile-1");
+  });
+
+  it("keeps a failed probe disabled and shows the problem on the card", async () => {
+    let profile = engineFixture();
+    vi.mocked(listEngineProfiles).mockImplementation(async () => [profile]);
+    vi.mocked(probeEngineProfile).mockImplementation(async () => {
+      const response = failedProbe("Connection refused at http://127.0.0.1:11434.");
+      profile = response.profile;
+      return response;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByRole("heading", { name: "Fixture profile" });
+    fireEvent.click(within(checklistFor()).getByRole("button", { name: "Probe" }));
+
+    expect(
+      await screen.findByText(/Connection refused at http:\/\/127\.0\.0\.1:11434\./, {
+        selector: ".engine-probe-problem",
+      }),
+    ).toHaveAttribute("role", "alert");
+    const checklist = checklistFor();
+    expect(within(checklist).getByRole("button", { name: "Probe" }).closest("li")).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    expect(within(checklist).getByRole("button", { name: "Enable" })).toBeDisabled();
+    expect(enableEngineProfile).not.toHaveBeenCalled();
+  });
+
+  it("puts starting the server first for managed profiles", async () => {
+    vi.mocked(listEngineProfiles).mockResolvedValue([
+      engineFixture({ integration_mode: "managed_process" }),
+    ]);
+    render(<EnginesScreen />);
+    await screen.findByRole("heading", { name: "Fixture profile" });
+    const checklist = checklistFor();
+    expect(
+      within(checklist).getByRole("button", { name: "Start server" }).closest("li"),
+    ).toHaveAttribute("aria-current", "step");
+    expect(within(checklist).getByRole("button", { name: "Probe" })).toBeDisabled();
+  });
+});
+
+describe("setup after adding an engine", () => {
+  function addFromDialog(name: string, mode?: string) {
+    fireEvent.click(screen.getByRole("button", { name: "Add manually" }));
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Profile name" }), {
+      target: { value: name },
+    });
+    if (mode)
+      fireEvent.change(within(dialog).getByRole("combobox", { name: "Connection mode" }), {
+        target: { value: mode },
+      });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add engine" }));
+  }
+
+  it("probes and enables a new attached profile automatically", async () => {
+    let saved: EngineProfile[] = [];
+    vi.mocked(listEngineProfiles).mockImplementation(async () => saved);
+    vi.mocked(createEngineProfile).mockImplementation(async (input) => {
+      saved = [engineFixture({ label: input.label })];
+      return saved[0]!;
+    });
+    vi.mocked(probeEngineProfile).mockImplementation(async () => {
+      saved = [engineFixture({ label: "New engine", last_probed_at: "2026-01-01T00:00:00Z" })];
+      return probeFixture;
+    });
+    vi.mocked(enableEngineProfile).mockImplementation(async () => {
+      saved = [
+        engineFixture({
+          label: "New engine",
+          status: "enabled",
+          last_probed_at: "2026-01-01T00:00:00Z",
+        }),
+      ];
+      return saved[0]!;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    addFromDialog("New engine");
+
+    expect(
+      await screen.findByText("New engine is ready. Try it in the Playground or benchmark it."),
+    ).toBeInTheDocument();
+    const create = vi.mocked(createEngineProfile).mock.invocationCallOrder[0]!;
+    const probe = vi.mocked(probeEngineProfile).mock.invocationCallOrder[0]!;
+    const enable = vi.mocked(enableEngineProfile).mock.invocationCallOrder[0]!;
+    expect(create).toBeLessThan(probe);
+    expect(probe).toBeLessThan(enable);
+    expect(probeEngineProfile).toHaveBeenCalledWith("profile-1", false);
+    expect(within(checklistFor("New engine")).getByText("✓ Enabled")).toBeInTheDocument();
+  });
+
+  it("leaves a new profile disabled when its automatic probe fails", async () => {
+    let saved: EngineProfile[] = [];
+    vi.mocked(listEngineProfiles).mockImplementation(async () => saved);
+    vi.mocked(createEngineProfile).mockImplementation(async (input) => {
+      saved = [engineFixture({ label: input.label })];
+      return saved[0]!;
+    });
+    vi.mocked(probeEngineProfile).mockImplementation(async () => {
+      const response = failedProbe("Nothing is listening on that port.");
+      saved = [{ ...response.profile, label: "Offline engine" }];
+      return response;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    addFromDialog("Offline engine");
+
+    expect(
+      await screen.findByText(/Nothing is listening on that port\./, {
+        selector: ".engine-probe-problem",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/its probe found a problem\. It stays disabled\./)).toBeInTheDocument();
+    expect(enableEngineProfile).not.toHaveBeenCalled();
+    expect(screen.getByText("Needs Attention")).toBeInTheDocument();
+  });
+
+  it("does not start or probe a new managed profile", async () => {
+    let saved: EngineProfile[] = [];
+    vi.mocked(listEngineProfiles).mockImplementation(async () => saved);
+    vi.mocked(createEngineProfile).mockImplementation(async (input) => {
+      saved = [engineFixture({ label: input.label, integration_mode: "managed_process" })];
+      return saved[0]!;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    addFromDialog("Managed engine", "managed_process");
+
+    expect(
+      await screen.findByText("Added Managed engine. Next step: start its server."),
+    ).toBeInTheDocument();
+    expect(
+      within(checklistFor("Managed engine")).getByRole("button", { name: "Start server" }),
+    ).toBeInTheDocument();
+    expect(probeEngineProfile).not.toHaveBeenCalled();
+    expect(startEngineProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe("scan this machine", () => {
+  const scanResult: EngineDiscoveryResult = {
+    scanned: [
+      { port: 11434, status: "found" },
+      { port: 8080, status: "found" },
+      { port: 5001, status: "no_response" },
+    ],
+    candidates: [
+      {
+        adapter_id: "localforge.ollama",
+        display_name: "Ollama",
+        endpoint_url: "http://127.0.0.1:11434",
+        engine_version: "0.5.7",
+        models: ["llama3.2:3b", "qwen2.5:7b", "phi4:14b", "gemma3:4b"],
+        evidence: "GET /api/version answered with an Ollama version.",
+        existing_profile_ids: [],
+      },
+      {
+        adapter_id: "fake",
+        display_name: "Deterministic Fake Engine",
+        endpoint_url: "http://127.0.0.1:8080",
+        engine_version: null,
+        models: [],
+        evidence: "Fixture banner.",
+        existing_profile_ids: ["profile-1"],
+      },
+    ],
+    duration_ms: 132,
+  };
+
+  it("leads the empty state with a scan and lists found and already-added engines", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([catalogFixture, ollamaFixture]);
+    vi.mocked(discoverEngines).mockResolvedValue(scanResult);
+
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    const scanButton = screen.getByRole("button", { name: "Scan this machine" });
+    expect(scanButton).toHaveClass("button--primary");
+    expect(screen.getByRole("button", { name: "Add manually" })).toHaveClass("button--quiet");
+    fireEvent.click(scanButton);
+
+    const panel = await screen.findByRole("region", { name: "Engines running on this computer" });
+    expect(
+      within(panel).getByText(/only checks local ports on this computer \(127\.0\.0\.1\)/),
+    ).toBeInTheDocument();
+    expect(await within(panel).findByRole("heading", { name: "Ollama" })).toBeInTheDocument();
+    expect(within(panel).getByText("0.5.7")).toBeInTheDocument();
+    expect(within(panel).getByText("http://127.0.0.1:11434")).toBeInTheDocument();
+    expect(
+      within(panel).getByText("4 models: llama3.2:3b, qwen2.5:7b, phi4:14b and 1 more"),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText("GET /api/version answered with an Ollama version."),
+    ).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Add Ollama" })).toBeEnabled();
+    expect(within(panel).getByText("Already added")).toBeInTheDocument();
+    expect(within(panel).getByText("Checked 3 ports on 127.0.0.1 in 132 ms")).toBeInTheDocument();
+    expect(within(panel).getByText("Port 5001: nothing answering")).toBeInTheDocument();
+    expect(screen.getByText("Scan finished. Found 2 engines.")).toBeInTheDocument();
+  });
+
+  it("links an already-added engine to its profile card", async () => {
+    vi.mocked(listEngineProfiles).mockResolvedValue([engineFixture()]);
+    vi.mocked(discoverEngines).mockResolvedValue(scanResult);
+    render(<EnginesScreen />);
+    await screen.findByRole("heading", { name: "Fixture profile" });
+    fireEvent.click(screen.getByRole("button", { name: "Scan this machine" }));
+    const show = await screen.findByRole("button", {
+      name: "Show profile for Deterministic Fake Engine",
+    });
+    fireEvent.click(show);
+    expect(screen.getByRole("heading", { name: "Fixture profile" })).toHaveFocus();
+  });
+
+  it("adds a found engine in one click, then probes and enables it", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([catalogFixture, ollamaFixture]);
+    let saved: EngineProfile[] = [];
+    vi.mocked(listEngineProfiles).mockImplementation(async () => saved);
+    vi.mocked(discoverEngines).mockResolvedValue({
+      ...scanResult,
+      candidates: [scanResult.candidates[0]!],
+    });
+    const ollamaProfile = (overrides: Partial<EngineProfile> = {}) =>
+      engineFixture({
+        id: "ollama-1",
+        label: "Ollama on this machine",
+        adapter_id: "localforge.ollama",
+        endpoint_url: "http://127.0.0.1:11434",
+        ...overrides,
+      });
+    vi.mocked(createEngineProfile).mockImplementation(async () => {
+      saved = [ollamaProfile()];
+      return saved[0]!;
+    });
+    vi.mocked(probeEngineProfile).mockImplementation(async () => {
+      saved = [ollamaProfile({ last_probed_at: "2026-01-01T00:00:00Z" })];
+      return { ...probeFixture, profile: saved[0]! };
+    });
+    vi.mocked(enableEngineProfile).mockImplementation(async () => {
+      saved = [ollamaProfile({ status: "enabled", last_probed_at: "2026-01-01T00:00:00Z" })];
+      return saved[0]!;
+    });
+
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    fireEvent.click(screen.getByRole("button", { name: "Scan this machine" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add Ollama" }));
+
+    expect(
+      await screen.findByText(
+        "Ollama on this machine is ready. Try it in the Playground or benchmark it.",
+      ),
+    ).toBeInTheDocument();
+    expect(createEngineProfile).toHaveBeenCalledWith({
+      label: "Ollama on this machine",
+      adapter_id: "localforge.ollama",
+      engine_display_name: null,
+      integration_mode: "attached_endpoint",
+      endpoint_url: "http://127.0.0.1:11434",
+      user_notes: null,
+    });
+    expect(probeEngineProfile).toHaveBeenCalledWith("ollama-1", false);
+    expect(enableEngineProfile).toHaveBeenCalledWith("ollama-1");
+    const order = [createEngineProfile, probeEngineProfile, enableEngineProfile].map(
+      (mock) => vi.mocked(mock).mock.invocationCallOrder[0]!,
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    const panel = screen.getByRole("region", { name: "Engines running on this computer" });
+    expect(within(panel).getByText("Already added")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Add Ollama" })).not.toBeInTheDocument();
+  });
+
+  it("explains what to do when nothing is found", async () => {
+    vi.mocked(discoverEngines).mockResolvedValue({
+      scanned: [{ port: 11434, status: "no_response" }],
+      candidates: [],
+      duration_ms: 40,
+    });
+    render(<EnginesScreen />);
+    await screen.findByText("No engine profiles are configured.");
+    fireEvent.click(screen.getByRole("button", { name: "Scan this machine" }));
+
+    const panel = await screen.findByRole("region", { name: "Engines running on this computer" });
+    expect(await within(panel).findByText("No running engines were found.")).toBeInTheDocument();
+    expect(within(panel).getByText(/Start your engine/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Scan again" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Add manually" })).toBeInTheDocument();
+    expect(screen.getByText("Scan finished. No running engines were found.")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Scan again" }));
+    await waitFor(() => expect(discoverEngines).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("engine recommendations placement", () => {
+  async function renderOverview(profiles: EngineProfile[]) {
+    const { fetchSystemProfile } = await import("../lib/api");
+    vi.mocked(fetchSystemProfile).mockResolvedValue(machineFixture);
+    vi.mocked(listRuns).mockResolvedValue([]);
+    vi.mocked(listEngineProfiles).mockResolvedValue(profiles);
+    vi.mocked(fetchEngineRecommendations).mockResolvedValue(recommendationsFixture());
+    render(<OverviewScreen />);
+    return screen.findByRole("region", { name: "Best engine fit for this machine" });
+  }
+
+  it("leads Overview with recommendations when no engine is set up", async () => {
+    const section = await renderOverview([]);
+    const welcome = screen.getByRole("heading", {
+      name: "Benchmark the model running on your machine.",
+    });
+    expect(
+      section.compareDocumentPosition(welcome) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      await within(section).findByRole("button", { name: "Show all 4 engines" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a compact top-three card lower on Overview once engines exist", async () => {
+    const section = await renderOverview([engineFixture()]);
+    const welcome = screen.getByRole("heading", {
+      name: "Benchmark the model running on your machine.",
+    });
+    expect(
+      section.compareDocumentPosition(welcome) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    const list = await within(section).findByRole("list", {
+      name: "Engines ranked for this machine",
+    });
+    expect(within(list).getAllByRole("heading", { level: 3 })).toHaveLength(3);
+    expect(within(section).queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument();
+  });
+
+  it("sits above the catalog on Engines and adds through the shared setup flow", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([catalogFixture, ollamaFixture]);
+    vi.mocked(fetchEngineRecommendations).mockResolvedValue(
+      recommendationsFixture([recommendationFixture()]),
+    );
+    let saved: EngineProfile[] = [];
+    vi.mocked(listEngineProfiles).mockImplementation(async () => saved);
+    const ollama = (overrides: Partial<EngineProfile> = {}) =>
+      engineFixture({
+        id: "ollama-1",
+        label: "Ollama on this machine",
+        adapter_id: "localforge.ollama",
+        endpoint_url: "http://127.0.0.1:11434",
+        ...overrides,
+      });
+    vi.mocked(createEngineProfile).mockImplementation(async () => {
+      saved = [ollama()];
+      return saved[0]!;
+    });
+    vi.mocked(probeEngineProfile).mockImplementation(async () => {
+      saved = [ollama({ last_probed_at: "2026-01-01T00:00:00Z" })];
+      return { ...probeFixture, profile: saved[0]! };
+    });
+    vi.mocked(enableEngineProfile).mockImplementation(async () => {
+      saved = [ollama({ status: "enabled", last_probed_at: "2026-01-01T00:00:00Z" })];
+      return saved[0]!;
+    });
+
+    render(<EnginesScreen />);
+    const section = await screen.findByRole("region", { name: "Best engine fit for this machine" });
+    const catalog = screen.getByRole("heading", { name: "Engine catalog" });
+    expect(
+      section.compareDocumentPosition(catalog) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(
+      await within(section).findByRole("button", { name: "Add Ollama on this machine" }),
+    );
+
+    expect(await within(section).findByRole("link", { name: "Benchmark Ollama" })).toHaveAttribute(
+      "href",
+      "#workloads?engine=ollama-1",
+    );
+    const order = [createEngineProfile, probeEngineProfile, enableEngineProfile].map(
+      (mock) => vi.mocked(mock).mock.invocationCallOrder[0]!,
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(
+      screen.getByText(
+        "Ollama on this machine is ready. Try it in the Playground or benchmark it.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(checklistFor("Ollama on this machine")).getByText("✓ Enabled"),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the Add dialog in managed mode for an installed llama.cpp", async () => {
+    vi.mocked(listEngineCatalog).mockResolvedValue([catalogFixture, llamaCppFixture]);
+    vi.mocked(fetchEngineRecommendations).mockResolvedValue(
+      recommendationsFixture([
+        recommendationFixture({
+          adapter_id: "localforge.llama_cpp",
+          display_name: "llama.cpp",
+          status: "installed",
+          endpoint_url: null,
+          status_detail: "llama-server was found but is not running.",
+        }),
+      ]),
+    );
+
+    render(<EnginesScreen />);
+    const section = await screen.findByRole("region", { name: "Best engine fit for this machine" });
+    await screen.findByRole("heading", { name: "llama.cpp / llama-server" });
+    fireEvent.click(await within(section).findByText("How to start it"));
+    fireEvent.click(within(section).getByRole("button", { name: "Add as managed" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Add an engine" });
+    expect(within(dialog).getByRole("combobox", { name: "Connection mode" })).toHaveValue(
+      "managed_process",
+    );
   });
 });

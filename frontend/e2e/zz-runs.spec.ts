@@ -13,7 +13,8 @@ async function registerFakeEngine(page: Page, label: string) {
   const profile = page.locator(".engine-profile-card").filter({
     has: page.getByRole("heading", { name: label }),
   });
-  await profile.getByRole("button", { name: "Probe" }).click();
+  // Saving a new attached profile probes and enables it automatically.
+  await expect(profile.locator(".status-pill")).toHaveText("Enabled");
   await expect(page.getByRole("heading", { name: "Models reported by this probe" })).toBeVisible();
 }
 
@@ -54,7 +55,6 @@ test("follows, reconnects to, and cancels fake-engine runs from history", async 
 
   await page.goto("/#workloads");
   await selectFakeEngine(page, `Prompt 10 fake ${suffix}`);
-  await page.getByRole("button", { name: "Enable this probed engine" }).click();
 
   const completedPlanName = `Prompt 10 completed ${suffix}`;
   const completedRunId = await saveAndLaunchPlan(page, completedPlanName, 3);

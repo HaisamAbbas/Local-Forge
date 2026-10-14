@@ -16,14 +16,16 @@ test("builds, reviews, saves, and launches a fake-engine benchmark plan", async 
   const profile = page
     .locator(".engine-profile-card")
     .filter({ has: page.getByRole("heading", { name: "Prompt 9 fake target" }) });
-  await profile.getByRole("button", { name: "Probe" }).click();
+  // A new attached profile is probed and enabled automatically after saving.
+  await expect(profile.locator(".status-pill")).toHaveText("Enabled");
   await expect(page.getByRole("heading", { name: "Models reported by this probe" })).toBeVisible();
 
-  await page.goto("/#workloads");
+  // The checklist's Benchmark link opens Workloads with this engine preselected.
+  await profile.getByRole("link", { name: "Benchmark" }).click();
+  await expect(page).toHaveURL(/#workloads\?engine=/);
   const engineSelect = page.getByLabel("Engine profile");
-  await expect(engineSelect).toHaveValue(/.+/);
+  await expect(engineSelect.locator("option:checked")).toHaveText(/Prompt 9 fake target/);
   await expect(page.getByRole("option", { name: /LocalForge Test Model/ })).toBeAttached();
-  await page.getByRole("button", { name: "Enable this probed engine" }).click();
   await expect(page.getByText("This engine has been probed but is disabled.")).toHaveCount(0);
 
   const planName = page.getByLabel("Plan and workload name");

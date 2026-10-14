@@ -13,7 +13,8 @@ async function registerFakeEngine(page: Page, label: string) {
   const profile = page.locator(".engine-profile-card").filter({
     has: page.getByRole("heading", { name: label }),
   });
-  await profile.getByRole("button", { name: "Probe" }).click();
+  // Saving a new attached profile probes and enables it automatically.
+  await expect(profile.locator(".status-pill")).toHaveText("Enabled");
   await expect(page.getByRole("heading", { name: "Models reported by this probe" })).toBeVisible();
 }
 
@@ -41,7 +42,6 @@ test("runs a controlled sweep, explains the change, and exports its report", asy
   const engineId = await engineOption.getAttribute("value");
   if (!engineId) throw new Error("The registered fixture engine is missing from Workloads.");
   await page.getByLabel("Engine profile").selectOption(engineId);
-  await page.getByRole("button", { name: "Enable this probed engine" }).click();
   await page.getByLabel("Plan and workload name").fill(planName);
   await page.getByLabel("Measured request limit").fill("2");
   await page.getByLabel("Warmup requests").fill("0");
