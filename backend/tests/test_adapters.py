@@ -79,7 +79,7 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     ollama = next(item for item in manifests if item.adapter_id == "localforge.ollama")
     assert ollama.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert ollama.operating_systems
-    assert ollama.version_tested == ["0.12.0 (local API fixture)"]
+    assert ollama.version_tested == ["0.12.0 (local API fixture)", "0.40.3 (live, Windows CPU)"]
     assert "server_reported_durations" in ollama.declared_capabilities
     assert not ollama.declared_capabilities.intersection({"managed_process", "cancellation"})
     vllm = next(item for item in manifests if item.adapter_id == "localforge.vllm")
@@ -87,7 +87,10 @@ def test_manifest_validation_and_default_catalog_listing() -> None:
     assert vllm.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert sglang.integration_modes == [EngineIntegrationMode.ATTACHED_ENDPOINT]
     assert vllm.adapter_id != sglang.adapter_id
-    assert llama_cpp.version_tested == ["b11580 (local API fixture)"]
+    assert llama_cpp.version_tested == [
+        "b11580 (local API fixture)",
+        "b11609 (live, Windows CPU, attached and managed)",
+    ]
     assert compatible.operating_systems
     triton = next(item for item in manifests if item.adapter_id == "localforge.triton_tensorrt_llm")
     assert triton.implementation_status == "planned"

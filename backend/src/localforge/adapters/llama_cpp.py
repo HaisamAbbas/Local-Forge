@@ -310,7 +310,10 @@ class LlamaCppEngineAdapter:
                 EngineIntegrationMode.ATTACHED_ENDPOINT,
                 EngineIntegrationMode.MANAGED_PROCESS,
             ],
-            version_tested=[f"{LLAMA_CPP_TESTED_VERSION} (local API fixture)"],
+            version_tested=[
+                f"{LLAMA_CPP_TESTED_VERSION} (local API fixture)",
+                "b11609 (live, Windows CPU, attached and managed)",
+            ],
             operating_systems=[
                 AdapterPlatform.WINDOWS,
                 AdapterPlatform.LINUX,
@@ -529,13 +532,15 @@ class LlamaCppEngineAdapter:
                 diagnostics,
                 suffix=".gguf",
             )
-            self._validate_path(
-                extension,
-                "working_directory",
-                "Select an existing working directory for llama-server.",
-                diagnostics,
-                directory=True,
-            )
+            # Without an explicit working directory, llama-server runs from its own folder.
+            if _text(extension.get("working_directory")):
+                self._validate_path(
+                    extension,
+                    "working_directory",
+                    "Select an existing working directory for llama-server.",
+                    diagnostics,
+                    directory=True,
+                )
             gpu_layers = extension.get("gpu_layers")
             if gpu_layers is not None and not (
                 (
@@ -1162,7 +1167,10 @@ class LlamaCppEngineAdapter:
         parsed = parse_engine_endpoint(self._endpoint(config))
         executable = Path(cast(str, extension["executable_path"]))
         model = Path(cast(str, extension["model_path"]))
-        working_directory = Path(cast(str, extension["working_directory"]))
+        configured_directory = _text(extension.get("working_directory"))
+        working_directory = (
+            Path(configured_directory) if configured_directory else executable.parent
+        )
         port = parsed.port or 9931
         arguments = [
             str(executable),
@@ -1187,9 +1195,9 @@ class LlamaCppEngineAdapter:
         gpu_layers = extension.get("gpu_layers")
         if isinstance(gpu_layers, (int, str)) and not isinstance(gpu_layers, bool):
             arguments.extend(("--gpu-layers", str(gpu_layers)))
-        model_id = _text(extension.get("model_id"))
-        if model_id:
-            arguments.extend(("--alias", model_id))
+        # Name the served model after its file so the full local path never becomes the model id.
+        model_id = _text(extension.get("model_id")) or model.stem
+        arguments.extend(("--alias", model_id))
         return arguments, working_directory, port
 
     async def start(self, config: AdapterConfiguration) -> AdapterProcessHandle:

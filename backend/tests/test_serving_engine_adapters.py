@@ -184,7 +184,12 @@ def test_additional_connectors_pass_shared_contract_and_report_fixture_coverage(
                 assert manifest.version_tested == []
             else:
                 assert manifest.version_tested
-                assert all("local API fixture" in value for value in manifest.version_tested)
+                # Every connector keeps fixture coverage; live-verified releases are labelled.
+                assert any("local API fixture" in value for value in manifest.version_tested)
+                assert all(
+                    "local API fixture" in value or "(live" in value
+                    for value in manifest.version_tested
+                )
             assert ("prometheus_text" in manifest.supported_transports) is bool(
                 manifest.native_metrics
             )

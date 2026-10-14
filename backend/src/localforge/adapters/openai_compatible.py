@@ -6,6 +6,7 @@ does not infer a vendor, engine version, model family, or server implementation 
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -204,6 +205,23 @@ def _bounded_float(value: object, default: float, *, minimum: float, maximum: fl
     return float(cast(int | float, value))
 
 
+_ABSOLUTE_WINDOWS_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def model_display_name(model_ref: str) -> str:
+    """Show a local file path model id by its file name; keep ids such as ``org/model`` intact.
+
+    Servers like llama-server report the loaded file path as the model id. The id must still be
+    sent on requests, but the full path is noise on screen and in exported reports.
+    """
+
+    if model_ref.startswith("/") or "\\" in model_ref or _ABSOLUTE_WINDOWS_PATH.match(model_ref):
+        name = model_ref.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        if name:
+            return name[:240]
+    return model_ref[:240]
+
+
 def _models_from_payload(payload: object) -> list[AdapterModel] | None:
     if not isinstance(payload, dict):
         return None
@@ -221,7 +239,7 @@ def _models_from_payload(payload: object) -> list[AdapterModel] | None:
         models.append(
             AdapterModel(
                 model_ref=normalized,
-                display_name=normalized[:240],
+                display_name=model_display_name(normalized),
                 metadata={"source": "openai_compatible_models_endpoint"},
             )
         )
@@ -945,7 +963,7 @@ class OpenAICompatibleEngineAdapter:
                 models.append(
                     AdapterModel(
                         model_ref=configured_model,
-                        display_name=configured_model[:240],
+                        display_name=model_display_name(configured_model),
                         metadata={"source": "user_supplied", "identity": "unknown/custom"},
                     )
                 )

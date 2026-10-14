@@ -241,7 +241,7 @@ class OllamaEngineAdapter:
             category=AdapterCategory.NATIVE_API,
             integration_modes=[EngineIntegrationMode.ATTACHED_ENDPOINT],
             operating_systems=list(AdapterPlatform),
-            version_tested=["0.12.0 (local API fixture)"],
+            version_tested=["0.12.0 (local API fixture)", "0.40.3 (live, Windows CPU)"],
             declared_capabilities={
                 "attach_only",
                 "health",

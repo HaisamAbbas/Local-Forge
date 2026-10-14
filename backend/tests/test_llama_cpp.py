@@ -549,6 +549,39 @@ def test_managed_start_refuses_a_busy_port_without_launching(tmp_path: Path) -> 
     asyncio.run(run())
 
 
+def test_managed_start_defaults_working_directory_to_executable_folder(tmp_path: Path) -> None:
+    async def run() -> None:
+        adapter = LlamaCppEngineAdapter()
+        captured: dict[str, Any] = {}
+
+        async def spawn(arguments: list[str], working_directory: Path) -> FakeProcess:
+            captured["arguments"] = arguments
+            captured["working_directory"] = working_directory
+            return FakeProcess()
+
+        async def ready(_process: Any, _port: int, _timeout: float) -> bool:
+            return True
+
+        adapter._spawn = spawn  # type: ignore[method-assign]
+        adapter._port_available = lambda _port: True  # type: ignore[method-assign]
+        adapter._wait_until_ready = ready  # type: ignore[method-assign]
+        engine_folder = tmp_path / "engine"
+        config = _managed_config(engine_folder)
+        del config.values["engine_extensions"]["llama_cpp"]["working_directory"]
+        try:
+            del config.values["engine_extensions"]["llama_cpp"]["model_id"]
+            assert (await adapter.validate_config(config)).valid
+            handle = await adapter.start(config)
+            assert captured["working_directory"] == engine_folder
+            # Without an explicit model id the alias is the file name, never the full path.
+            assert captured["arguments"][-2:] == ["--alias", "fixture-model"]
+            await adapter.stop(handle)
+        finally:
+            await adapter.close()
+
+    asyncio.run(run())
+
+
 def test_managed_start_uses_owned_pid_and_only_accepts_its_process_handle(
     tmp_path: Path,
 ) -> None:

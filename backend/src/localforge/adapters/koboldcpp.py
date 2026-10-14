@@ -27,10 +27,11 @@ class KoboldCppEngineAdapter(OpenAIServingEngineAdapter):
     default_health_route = None
     default_version_route = "/api/extra/version"
     default_model_info_route = None
-    default_include_usage = False
+    # KoboldCpp 1.123 returns a usage chunk when asked (verified live on Windows).
+    default_include_usage = True
     docs_url = "https://github.com/LostRuins/koboldcpp/wiki"
     default_port = 5001
-    tested_versions = ("1.122.1 (local API fixture)",)
+    tested_versions = ("1.122.1 (local API fixture)", "1.123 (live, Windows CPU)")
 
     def __init__(
         self,
