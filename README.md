@@ -88,6 +88,13 @@ sequence-cursor replay or Server-Sent Events at `/api/v1/runs/{run_id}/events/st
 `POST /api/v1/runs/{run_id}/cancel`. Resource collisions return `409`; retry with
 `override_contention: true` only after reviewing the warning. Events never contain request bodies;
 samples retain prompt and output text only when the saved plan explicitly enables retention.
+Delete a finished run with `DELETE /api/v1/runs/{run_id}` (`409 run_active` while it is still
+active), or preview and delete finished runs in bulk with `POST /api/v1/runs/cleanup`
+(`before`, `statuses`, `keep_latest`; `dry_run` defaults to `true`). Repeat a plan with optional
+changes through `POST /api/v1/benchmark-plans/{plan_id}/clone`; workload changes copy the workload,
+so the source plan and workload are never edited. `GET /api/v1/models` lists model artifacts across
+engine profiles. Saved reports are listed at `GET /api/v1/reports`, downloaded at
+`/api/v1/reports/{report_id}/download`, and removed with `DELETE /api/v1/reports/{report_id}`.
 Metric formulas, provenance, percentile minimums, and quality flags are documented in
 [`docs/metrics.md`](docs/metrics.md).
 Local API protection, data retention, path handling, process ownership, and recovery limits are
