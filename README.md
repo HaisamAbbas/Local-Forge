@@ -14,7 +14,32 @@ engine is for workflow tests only: it does not load a model and its timings are 
 model-performance measurements. Real endpoint requests are sent by the evaluator machine's local
 API to the configured endpoint. Ordinary checks do not download models or contact public endpoints.
 
-## Requirements
+## Install and run (users)
+
+Users do not need this repository, Node.js, or a Python setup. With
+[uv](https://docs.astral.sh/uv/) installed and an engine such as Ollama running with a model:
+
+```powershell
+uvx localforge-inference-lab
+```
+
+That starts LocalForge on `http://127.0.0.1:8000` (or a free port) and opens it in the browser.
+`uv tool install localforge-inference-lab` keeps a `localforge` command installed instead. Options:
+`--port`, `--data-dir`, `--no-browser`, `--version`. Before the package is on PyPI, point uv at a
+release wheel: `uvx --from <path-or-URL-to-wheel> localforge`.
+
+## Build a release
+
+```powershell
+python scripts/build_release.py
+```
+
+This builds the UI, bundles it into the Python package, and writes the wheel and source archive to
+`backend/dist/`. Publish them with `uv publish` (PyPI token required) or attach the wheel to a
+GitHub Release. Set `LOCALFORGE_WEB_DIR=frontend/dist` to serve a local UI build from a development
+API without packaging.
+
+## Requirements (development)
 
 - Python 3.12 or newer
 - Node.js 22.12 or newer and npm
