@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
 import { ExperimentsScreen } from "./components/ExperimentsScreen";
+import { LearningScreen } from "./components/LearningScreen";
+import { ModelsScreen } from "./components/ModelsScreen";
 import { PlaygroundScreen } from "./components/PlaygroundScreen";
+import { ReportsScreen } from "./components/ReportsScreen";
 import { RunsScreen } from "./components/RunsScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { WorkloadsScreen } from "./components/WorkloadsScreen";
@@ -18,6 +21,11 @@ const navigation = [
     id: "engines",
     label: "Engines",
     description: "Connect runtimes and inspect what each server supports.",
+  },
+  {
+    id: "models",
+    label: "Models",
+    description: "See every model your connected engines report, with format, size, and context.",
   },
   {
     id: "playground",
@@ -43,6 +51,11 @@ const navigation = [
     id: "experiments",
     label: "Experiments",
     description: "Compare controlled configuration changes.",
+  },
+  {
+    id: "reports",
+    label: "Reports",
+    description: "Download or remove the reports you have exported from comparisons.",
   },
   {
     id: "learning",
@@ -158,34 +171,17 @@ export function App() {
             />
           ) : activeScreen === "experiments" ? (
             <ExperimentsScreen />
-          ) : activeScreen === "settings" ? (
-            <SettingsScreen />
+          ) : activeScreen === "models" ? (
+            <ModelsScreen />
+          ) : activeScreen === "reports" ? (
+            <ReportsScreen />
+          ) : activeScreen === "learning" ? (
+            <LearningScreen />
           ) : (
-            <SectionEmptyState />
+            <SettingsScreen />
           )}
         </main>
       </div>
     </div>
-  );
-}
-
-function SectionEmptyState() {
-  return (
-    <section className="section-empty-state" aria-live="polite">
-      <p className="eyebrow">INFERENCE FIELD NOTES</p>
-      <h2>Build intuition from measured results.</h2>
-      <p>
-        Learning guides are not available yet. Start with your machine details, then run a workload
-        to see how your chosen engine responds.
-      </p>
-      <div className="section-empty-actions">
-        <a className="button button--primary" href="#system">
-          Inspect this machine
-        </a>
-        <a className="text-link" href="#workloads">
-          Build a workload
-        </a>
-      </div>
-    </section>
   );
 }
