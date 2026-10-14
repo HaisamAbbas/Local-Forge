@@ -1,14 +1,18 @@
-import { useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 
 import type { ExperimentSummary, RunComparison } from "../lib/api";
 import {
   comparisonChartGroups,
   experimentChartGroups,
+  PARETO_LATENCY_METRICS,
+  paretoChartData,
   type ComparisonChartGroup,
+  type ParetoLatencyMetric,
 } from "../lib/chart-data";
 import { formatValue } from "../lib/chart-scale";
 import { ChartFigure } from "./charts/ChartParts";
 import { HorizontalBarChart } from "./charts/HorizontalBarChart";
+import { ParetoChart } from "./charts/ParetoChart";
 
 function directionText(group: ComparisonChartGroup): string {
   if (group.direction === "lower") return "lower is better";
@@ -137,6 +141,98 @@ export function ExperimentVariantCharts({ summary }: { summary: ExperimentSummar
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Latency vs throughput scatter for the compared runs, with the Pareto frontier: runs no
+ * other run beats on both throughput (higher) and the chosen p95 latency (lower).
+ */
+export function RunParetoChart({
+  comparison,
+  runLabel,
+}: {
+  comparison: RunComparison;
+  runLabel?: (runId: string) => string;
+}) {
+  const [latencyMetric, setLatencyMetric] = useState<ParetoLatencyMetric>("request_latency_ms");
+  const selectId = useId();
+  const data = useMemo(
+    () => paretoChartData(comparison, latencyMetric, runLabel),
+    [comparison, latencyMetric, runLabel],
+  );
+  const yTitle =
+    PARETO_LATENCY_METRICS.find((item) => item.metricName === latencyMetric)?.title ?? "Latency";
+  const xTitle = data.xMetric?.title ?? "Output throughput";
+  const xUnit = data.xMetric?.unit ?? "tokens/s";
+  const yUnit = data.yMetric?.unit ?? "ms";
+  const empty = !data.xMetric
+    ? "No output or generation throughput value is shared by these runs, so latency cannot be plotted against throughput."
+    : !data.yMetric
+      ? `No ${yTitle.toLowerCase()} is shared by these runs. Try the other latency measure.`
+      : data.points.length === 0
+        ? "No run reported both a throughput and a latency value."
+        : null;
+  return (
+    <div className="lf-pareto-panel">
+      <label className="lf-pareto-panel__control" htmlFor={selectId}>
+        Latency axis
+        <select
+          id={selectId}
+          onChange={(event) => setLatencyMetric(event.target.value as ParetoLatencyMetric)}
+          value={latencyMetric}
+        >
+          {PARETO_LATENCY_METRICS.map((item) => (
+            <option key={item.metricName} value={item.metricName}>
+              {item.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <ChartFigure
+        caption={
+          <>
+            Filled points are Pareto-efficient: no other selected run has both higher throughput and
+            lower latency. Hollow points are dominated. The line joins efficient runs; it does not
+            predict configurations between them.
+            {data.omitted.length > 0 && (
+              <>
+                {" "}
+                Not plotted:{" "}
+                {data.omitted.map((item) => `${item.label} (${item.reason})`).join("; ")}.
+              </>
+            )}
+          </>
+        }
+        empty={empty}
+        id="comparison-chart-pareto"
+        subtitle={`${xTitle} (higher is better) vs ${yTitle} (lower is better)`}
+        table={{
+          caption: "Latency and throughput for each plotted run",
+          columns: ["Run", `${xTitle} (${xUnit})`, `${yTitle} (${yUnit})`, "Pareto-efficient"],
+          rows: data.points.map((point) => ({
+            key: point.key,
+            cells: [
+              `${point.label}${point.isBaseline ? " (baseline)" : ""}`,
+              formatValue(point.x, xUnit),
+              formatValue(point.y, yUnit),
+              point.efficient ? "Yes" : "No",
+            ],
+          })),
+        }}
+        title="Latency vs throughput"
+      >
+        <ParetoChart
+          ariaLabel={`${yTitle} in ${yUnit} against ${xTitle} in ${xUnit}`}
+          frontier={data.frontier}
+          points={data.points}
+          xLabel={`${xTitle} (${xUnit})`}
+          xUnit={xUnit}
+          yLabel={`${yTitle} (${yUnit})`}
+          yUnit={yUnit}
+        />
+      </ChartFigure>
     </div>
   );
 }

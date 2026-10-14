@@ -677,3 +677,140 @@ export function experimentChartGroups(summary: ExperimentSummary): ComparisonCha
   }
   return groups;
 }
+
+// ---------------------------------------------------------------------------
+// Latency vs throughput (Pareto) for compared runs
+// ---------------------------------------------------------------------------
+
+export type ParetoInput = { key: string; x: number; y: number };
+
+/**
+ * Keys of the Pareto-efficient points when larger x and smaller y are better: a point is
+ * efficient unless another point is at least as good on both axes and strictly better on
+ * one. Exact ties are all efficient. Non-finite points are ignored. Returned in x order.
+ */
+export function paretoFrontier(points: ParetoInput[]): string[] {
+  const finite = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const efficient = finite.filter(
+    (point) =>
+      !finite.some(
+        (other) =>
+          other !== point &&
+          other.x >= point.x &&
+          other.y <= point.y &&
+          (other.x > point.x || other.y < point.y),
+      ),
+  );
+  return efficient
+    .sort(
+      (left, right) => left.x - right.x || left.y - right.y || left.key.localeCompare(right.key),
+    )
+    .map((point) => point.key);
+}
+
+/** Throughput metrics usable for the x axis, in preference order (higher is better). */
+export const PARETO_THROUGHPUT_METRICS = [
+  { metricName: "output_throughput_tokens_per_second", title: "Output throughput" },
+  { metricName: "generation_throughput_tokens_per_second", title: "Generation throughput" },
+] as const;
+
+/** Latency metrics selectable for the y axis (p95, lower is better). */
+export const PARETO_LATENCY_METRICS = [
+  { metricName: "request_latency_ms", title: "Request latency p95" },
+  { metricName: "ttft_ms", title: "Time to first token p95" },
+] as const;
+
+export type ParetoLatencyMetric = (typeof PARETO_LATENCY_METRICS)[number]["metricName"];
+
+export type ParetoPoint = {
+  key: string;
+  label: string;
+  x: number;
+  y: number;
+  efficient: boolean;
+  isBaseline: boolean;
+};
+
+export type ParetoChartData = {
+  xMetric: { metricName: string; title: string; unit: string } | null;
+  yMetric: { metricName: string; title: string; unit: string } | null;
+  points: ParetoPoint[];
+  /** Keys of efficient points in ascending throughput order (the frontier polyline). */
+  frontier: string[];
+  /** Runs left off the chart, with the reason (never plotted as zero). */
+  omitted: Array<{ key: string; label: string; reason: string }>;
+};
+
+type SharedMetric = RunComparison["shared_metrics"][number];
+
+/** The shared record for a metric, preferring the unlabelled (whole-run) one. */
+function pickSharedMetric(
+  comparison: RunComparison,
+  metricName: string,
+  aggregation: string,
+): SharedMetric | null {
+  const matches = comparison.shared_metrics.filter(
+    (metric) => metric.metric_name === metricName && metric.aggregation === aggregation,
+  );
+  return matches.find((metric) => Object.keys(metric.labels).length === 0) ?? matches[0] ?? null;
+}
+
+/**
+ * One point per compared run: x = output (or generation) throughput run rate, y = the chosen
+ * p95 latency. Runs missing either value are listed in `omitted` instead of being plotted.
+ */
+export function paretoChartData(
+  comparison: RunComparison,
+  latencyMetric: ParetoLatencyMetric,
+  runLabel: (runId: string) => string = (runId) => `Run ${runId.slice(0, 8)}`,
+): ParetoChartData {
+  let xShared: SharedMetric | null = null;
+  let xTitle = "";
+  for (const candidate of PARETO_THROUGHPUT_METRICS) {
+    const metric = pickSharedMetric(comparison, candidate.metricName, "run_rate");
+    if (metric && comparison.run_ids.some((id) => isFiniteNumber(metric.runs[id]?.value))) {
+      xShared = metric;
+      xTitle = candidate.title;
+      break;
+    }
+  }
+  const yInfo = PARETO_LATENCY_METRICS.find((item) => item.metricName === latencyMetric)!;
+  const yShared = pickSharedMetric(comparison, latencyMetric, "p95");
+  const points: Array<Omit<ParetoPoint, "efficient">> = [];
+  const omitted: ParetoChartData["omitted"] = [];
+  for (const runId of comparison.run_ids) {
+    const label = runLabel(runId);
+    const x = xShared?.runs[runId]?.value;
+    const y = yShared?.runs[runId]?.value;
+    const missing = [
+      ...(isFiniteNumber(x) ? [] : ["throughput"]),
+      ...(isFiniteNumber(y) ? [] : [yInfo.title.toLowerCase()]),
+    ];
+    if (missing.length) {
+      omitted.push({ key: runId, label, reason: `no ${missing.join(" or ")} value reported` });
+      continue;
+    }
+    points.push({
+      key: runId,
+      label,
+      x: x as number,
+      y: y as number,
+      isBaseline: runId === comparison.baseline_run_id,
+    });
+  }
+  const frontier = paretoFrontier(points);
+  const efficient = new Set(frontier);
+  return {
+    xMetric: xShared
+      ? { metricName: xShared.metric_name, title: xTitle, unit: xShared.unit }
+      : null,
+    yMetric: yShared
+      ? { metricName: yShared.metric_name, title: yInfo.title, unit: yShared.unit }
+      : null,
+    points: points
+      .map((point) => ({ ...point, efficient: efficient.has(point.key) }))
+      .sort((left, right) => left.x - right.x || left.y - right.y),
+    frontier,
+    omitted,
+  };
+}

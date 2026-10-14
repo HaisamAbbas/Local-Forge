@@ -8,6 +8,8 @@ import {
   engineTimingsPerRequest,
   experimentChartGroups,
   histogramBins,
+  paretoChartData,
+  paretoFrontier,
   percentileSummary,
   pooledGaps,
   quantileR7,
@@ -365,5 +367,129 @@ describe("scale helpers", () => {
     expect(nearestIndex([], 5)).toBeNull();
     expect(roundedBarPath(0, 0, 0, 10, 4, "up")).toBe("");
     expect(roundedBarPath(0, 0, 20, 10, 4, "right")).toContain("Q20,0 20,4");
+  });
+});
+
+describe("latency vs throughput frontier", () => {
+  it("keeps only runs no other run beats on both throughput and latency", () => {
+    const frontier = paretoFrontier([
+      { key: "slow-fast", x: 10, y: 100 },
+      { key: "dominated", x: 9, y: 120 },
+      { key: "fast-slow", x: 30, y: 400 },
+      { key: "middle", x: 20, y: 200 },
+      { key: "beaten-by-middle", x: 20, y: 250 },
+    ]);
+    expect(frontier).toEqual(["slow-fast", "middle", "fast-slow"]);
+  });
+
+  it("treats exact ties as efficient and ignores non-finite values", () => {
+    expect(
+      paretoFrontier([
+        { key: "b", x: 5, y: 50 },
+        { key: "a", x: 5, y: 50 },
+        { key: "nan", x: Number.NaN, y: 1 },
+        { key: "inf", x: Number.POSITIVE_INFINITY, y: 1 },
+      ]),
+    ).toEqual(["a", "b"]);
+    expect(paretoFrontier([])).toEqual([]);
+    expect(paretoFrontier([{ key: "only", x: 1, y: 1 }])).toEqual(["only"]);
+  });
+
+  it("a single run that is best on both axes dominates every other run", () => {
+    expect(
+      paretoFrontier([
+        { key: "best", x: 50, y: 10 },
+        { key: "a", x: 40, y: 20 },
+        { key: "b", x: 10, y: 11 },
+      ]),
+    ).toEqual(["best"]);
+  });
+
+  const runs = ["run-a-0001", "run-b-0002", "run-c-0003"] as const;
+  const metric = (
+    name: string,
+    aggregation: string,
+    unit: string,
+    values: Record<string, number | null>,
+    labels: Record<string, string> = {},
+  ) => ({
+    metric_name: name,
+    aggregation,
+    unit,
+    labels,
+    runs: Object.fromEntries(
+      Object.entries(values).map(([id, value]) => [
+        id,
+        { value, sample_count: 4, record_count: 1 },
+      ]),
+    ),
+  });
+  const paretoComparison = {
+    run_ids: runs,
+    baseline_run_id: runs[0],
+    shared_metrics: [
+      metric("request_latency_ms", "p95", "ms", { [runs[0]]: 900, [runs[1]]: 500, [runs[2]]: 700 }),
+      metric("ttft_ms", "p95", "ms", { [runs[0]]: 80, [runs[1]]: null, [runs[2]]: 60 }),
+      metric("generation_throughput_tokens_per_second", "run_rate", "tokens/s", {
+        [runs[0]]: 1,
+        [runs[1]]: 1,
+        [runs[2]]: 1,
+      }),
+      metric("output_throughput_tokens_per_second", "run_rate", "tokens/s", {
+        [runs[0]]: 40,
+        [runs[1]]: 30,
+        [runs[2]]: 20,
+      }),
+      metric(
+        "output_throughput_tokens_per_second",
+        "run_rate",
+        "tokens/s",
+        { [runs[0]]: 999, [runs[1]]: 999, [runs[2]]: 999 },
+        { concurrency: "4" },
+      ),
+    ],
+  } as unknown as RunComparison;
+
+  it("builds one point per run from output throughput and the chosen p95 latency", () => {
+    const data = paretoChartData(paretoComparison, "request_latency_ms", (id) => `Plan ${id[4]}`);
+    expect(data.xMetric).toEqual({
+      metricName: "output_throughput_tokens_per_second",
+      title: "Output throughput",
+      unit: "tokens/s",
+    });
+    expect(data.points.map((point) => [point.label, point.x, point.y, point.efficient])).toEqual([
+      ["Plan c", 20, 700, false],
+      ["Plan b", 30, 500, true],
+      ["Plan a", 40, 900, true],
+    ]);
+    expect(data.frontier).toEqual([runs[1], runs[0]]);
+    expect(data.points.find((point) => point.isBaseline)?.key).toBe(runs[0]);
+    expect(data.omitted).toEqual([]);
+  });
+
+  it("omits runs with a missing value instead of plotting zero", () => {
+    const data = paretoChartData(paretoComparison, "ttft_ms");
+    expect(data.points.map((point) => point.key)).toEqual([runs[2], runs[0]]);
+    expect(data.omitted).toEqual([
+      { key: runs[1], label: "Run run-b-00", reason: "no time to first token p95 value reported" },
+    ]);
+  });
+
+  it("falls back to generation throughput and reports when no axis metric is shared", () => {
+    const generationOnly = {
+      ...paretoComparison,
+      shared_metrics: paretoComparison.shared_metrics.filter(
+        (item) => item.metric_name !== "output_throughput_tokens_per_second",
+      ),
+    } as RunComparison;
+    expect(paretoChartData(generationOnly, "request_latency_ms").xMetric?.metricName).toBe(
+      "generation_throughput_tokens_per_second",
+    );
+    const none = { ...paretoComparison, shared_metrics: [] } as unknown as RunComparison;
+    const empty = paretoChartData(none, "request_latency_ms");
+    expect(empty.xMetric).toBeNull();
+    expect(empty.yMetric).toBeNull();
+    expect(empty.points).toEqual([]);
+    expect(empty.omitted).toHaveLength(3);
   });
 });

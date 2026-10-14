@@ -5,25 +5,30 @@ import {
   compareRuns,
   createExperimentGroup,
   createReport,
+  fetchWorkspaceSettings,
   getExperimentGroup,
   getExperimentSummary,
   getRun,
   importBenchmarkPlan,
   launchNextExperimentTrial,
   listBenchmarkPlans,
+  listEngineProfiles,
   listExperimentGroups,
   listRuns,
   startExperimentGroup,
 } from "../lib/api";
-import { ExperimentVariantCharts, RunComparisonCharts } from "./ComparisonCharts";
+import { fixtureFilter } from "../lib/test-fixtures";
+import { ExperimentVariantCharts, RunComparisonCharts, RunParetoChart } from "./ComparisonCharts";
 import type {
   BenchmarkPlan,
   BenchmarkRun,
+  EngineProfile,
   ExperimentCreateInput,
   ExperimentGroup,
   ExperimentSummary,
   ReportMetadata,
   RunComparison,
+  WorkspaceSettingsResponse,
 } from "../lib/api";
 
 const sweepVariables = [
@@ -88,6 +93,24 @@ function isTerminal(run: BenchmarkRun): boolean {
   return ["completed", "failed", "cancelled", "interrupted"].includes(run.status);
 }
 
+/** Everything the screen lists. Engines and Settings only filter fixtures, so they may fail. */
+async function loadScreenData() {
+  const [runs, plans, groups, engines, settings] = await Promise.all([
+    listRuns(100),
+    listBenchmarkPlans(),
+    listExperimentGroups(),
+    listEngineProfiles().catch((): EngineProfile[] => []),
+    fetchWorkspaceSettings().catch(() => null),
+  ]);
+  return { runs, plans, groups, engines, settings };
+}
+
+/** First ready plan that is not a hidden test fixture. */
+function defaultBaselinePlan(data: Awaited<ReturnType<typeof loadScreenData>>): string {
+  const { isFixturePlan } = fixtureFilter(data.engines, data.plans, data.settings);
+  return data.plans.find((plan) => plan.status === "ready" && !isFixturePlan(plan))?.id ?? "";
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -95,6 +118,8 @@ function sleep(milliseconds: number): Promise<void> {
 export function ExperimentsScreen() {
   const [runs, setRuns] = useState<BenchmarkRun[]>([]);
   const [plans, setPlans] = useState<BenchmarkPlan[]>([]);
+  const [engines, setEngines] = useState<EngineProfile[]>([]);
+  const [settings, setSettings] = useState<WorkspaceSettingsResponse | null>(null);
   const planNames = useMemo(() => new Map(plans.map((plan) => [plan.id, plan.name])), [plans]);
   const runLabel = useCallback(
     (runId: string) => {
@@ -131,35 +156,27 @@ export function ExperimentsScreen() {
     hypothesis: "",
   });
 
-  const refresh = useCallback(async () => {
-    const [nextRuns, nextPlans, nextGroups] = await Promise.all([
-      listRuns(100),
-      listBenchmarkPlans(),
-      listExperimentGroups(),
-    ]);
-    setRuns(nextRuns);
-    setPlans(nextPlans);
-    setGroups(nextGroups);
+  const applyScreenData = useCallback((data: Awaited<ReturnType<typeof loadScreenData>>) => {
+    setRuns(data.runs);
+    setPlans(data.plans);
+    setGroups(data.groups);
+    setEngines(data.engines);
+    setSettings(data.settings);
     setDraft((current) => ({
       ...current,
-      baselinePlanId:
-        current.baselinePlanId || nextPlans.find((plan) => plan.status === "ready")?.id || "",
+      baselinePlanId: current.baselinePlanId || defaultBaselinePlan(data),
     }));
   }, []);
 
+  const refresh = useCallback(async () => {
+    applyScreenData(await loadScreenData());
+  }, [applyScreenData]);
+
   useEffect(() => {
     let active = true;
-    void Promise.all([listRuns(100), listBenchmarkPlans(), listExperimentGroups()])
-      .then(([nextRuns, nextPlans, nextGroups]) => {
-        if (!active) return;
-        setRuns(nextRuns);
-        setPlans(nextPlans);
-        setGroups(nextGroups);
-        setDraft((current) => ({
-          ...current,
-          baselinePlanId:
-            current.baselinePlanId || nextPlans.find((plan) => plan.status === "ready")?.id || "",
-        }));
+    void loadScreenData()
+      .then((data) => {
+        if (active) applyScreenData(data);
       })
       .catch((loadError: unknown) => {
         if (active) setError(errorMessage(loadError));
@@ -170,11 +187,25 @@ export function ExperimentsScreen() {
     return () => {
       active = false;
     };
-  }, [refresh]);
+  }, [applyScreenData]);
 
+  const fixtures = useMemo(
+    () => fixtureFilter(engines, plans, settings),
+    [engines, plans, settings],
+  );
+  const visiblePlans = useMemo(
+    () => plans.filter((plan) => !fixtures.isFixturePlan(plan)),
+    [plans, fixtures],
+  );
+  const readyPlans = visiblePlans.filter((plan) => plan.status === "ready");
+  const hiddenPlanCount = plans.length - visiblePlans.length;
   const selectableRuns = useMemo(
-    () => runs.filter((run) => run.status === "completed" || run.status === "failed"),
-    [runs],
+    () =>
+      runs.filter(
+        (run) =>
+          (run.status === "completed" || run.status === "failed") && !fixtures.isFixtureRun(run),
+      ),
+    [runs, fixtures],
   );
   const selectedPlans = useMemo(() => {
     const planById = new Map(plans.map((plan) => [plan.id, plan]));
@@ -559,7 +590,10 @@ export function ExperimentsScreen() {
             </div>
             <h3>Shared metrics</h3>
             {comparison.shared_metrics.length > 0 && (
-              <RunComparisonCharts comparison={comparison} runLabel={runLabel} />
+              <>
+                <RunComparisonCharts comparison={comparison} runLabel={runLabel} />
+                <RunParetoChart comparison={comparison} runLabel={runLabel} />
+              </>
             )}
             {comparison.shared_metrics.length === 0 ? (
               <p className="experiments-empty">
@@ -781,7 +815,7 @@ export function ExperimentsScreen() {
           </div>
           <span className="experiment-limit">Maximum {20} trials · sequential execution</span>
         </div>
-        {plans.filter((plan) => plan.status === "ready").length === 0 ? (
+        {readyPlans.length === 0 ? (
           <p className="experiments-empty">
             Create and preflight a benchmark plan in Workloads before setting up a sweep.
           </p>
@@ -804,13 +838,11 @@ export function ExperimentsScreen() {
                 value={draft.baselinePlanId}
               >
                 <option value="">Choose a ready plan</option>
-                {plans
-                  .filter((plan) => plan.status === "ready")
-                  .map((plan) => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name}
-                    </option>
-                  ))}
+                {readyPlans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -1015,7 +1047,7 @@ export function ExperimentsScreen() {
           </label>
         </div>
         <div className="plan-export-list">
-          {plans.map((plan) => (
+          {visiblePlans.map((plan) => (
             <div className="plan-export-row" key={plan.id}>
               <div>
                 <strong>{plan.name}</strong>
@@ -1030,6 +1062,12 @@ export function ExperimentsScreen() {
             </div>
           ))}
         </div>
+        {hiddenPlanCount > 0 && (
+          <p className="experiments-empty" role="note">
+            {hiddenPlanCount} plan(s) and their runs use test-fixture engines and are hidden. Turn
+            on test fixture engines in <a href="#settings">Settings</a> to show them.
+          </p>
+        )}
         <p className="privacy-footnote">
           Plan files contain workload settings and local record IDs, never endpoint credentials or
           dataset text. Dataset-based plans import only when the same dataset snapshot is present.
