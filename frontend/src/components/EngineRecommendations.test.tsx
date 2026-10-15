@@ -77,6 +77,10 @@ describe("engine recommendations", () => {
     expect(screen.getByText(/Models up to about 7B parameters/)).toBeInTheDocument();
     expect(screen.getByText(/this is not a speed measurement/)).toBeVisible();
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/engines/recommendations", expect.anything());
+    expect(screen.getByRole("link", { name: "Which model should I run?" })).toHaveAttribute(
+      "href",
+      "#models",
+    );
   });
 
   it("ranks the top three and expands to all suitable engines", async () => {

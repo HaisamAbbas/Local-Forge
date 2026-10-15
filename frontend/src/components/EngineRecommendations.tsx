@@ -6,6 +6,7 @@ import {
   FIT_LABEL,
   INSTALL_STATUS_LABEL,
   INSTALL_STATUS_PILL,
+  MODEL_SUGGESTIONS_HREF,
   addRecommendedEngine,
   measuredText,
   readStoredFlag,
@@ -449,6 +450,11 @@ export function EngineRecommendations({
                 {state.value.model_size_guidance.text && (
                   <p>{state.value.model_size_guidance.text}</p>
                 )}
+                <p>
+                  <a className="text-link" href={MODEL_SUGGESTIONS_HREF}>
+                    Which model should I run?
+                  </a>
+                </p>
                 <p className="helper-copy engine-recs__method">{state.value.method}</p>
               </div>
               <RecommendationsBody

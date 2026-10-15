@@ -8,6 +8,7 @@ import {
   type EngineProfile,
   type ModelRecord,
 } from "../lib/api";
+import { ModelSuggestions } from "./ModelSuggestions";
 
 type Inventory = { models: ModelRecord[]; profiles: EngineProfile[] };
 type LoadState =
@@ -93,10 +94,11 @@ function groupByEngine({ models, profiles }: Inventory): EngineGroup[] {
 }
 
 /**
- * Models visible to connected engines, grouped by engine profile. Refreshing re-probes the
- * engine; LOCALFORGE never downloads or removes models.
+ * Suggested models for this machine, then models visible to connected engines grouped by engine
+ * profile. Refreshing re-probes the engine. Models are downloaded only through a confirmed
+ * "Pull with Ollama"; LOCALFORGE never removes models.
  */
-export function ModelsScreen() {
+export function ModelsScreen({ pullPollIntervalMs }: { pullPollIntervalMs?: number } = {}) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [refresh, setRefresh] = useState<Record<string, RefreshState>>({});
 
@@ -124,6 +126,8 @@ export function ModelsScreen() {
       active = false;
     };
   }, []);
+
+  const inventoryChanged = useCallback(() => void reload(false), [reload]);
 
   const refreshEngine = async (profileId: string, confirmRemote: boolean) => {
     setRefresh((current) => ({ ...current, [profileId]: { status: "busy" } }));
@@ -165,15 +169,16 @@ export function ModelsScreen() {
 
   return (
     <div className="screen-stack">
+      <ModelSuggestions onModelsChanged={inventoryChanged} pollIntervalMs={pullPollIntervalMs} />
       <section className="panel models-panel" aria-labelledby="models-title">
         <div className="section-title-row">
           <div>
             <p className="eyebrow">MODEL INVENTORY</p>
             <h2 id="models-title">Models visible to connected engines</h2>
             <p className="helper-copy">
-              Inventory comes from engine probes. LOCALFORGE never downloads or removes models;
-              install them with the engine itself, then refresh. Values the engine does not report
-              are shown as unknown.
+              Inventory comes from engine probes. LOCALFORGE downloads a model only when you confirm
+              Pull with Ollama above, and never removes models; install others with the engine
+              itself, then refresh. Values the engine does not report are shown as unknown.
             </p>
           </div>
           <button className="button button--quiet" onClick={() => void reload()} type="button">

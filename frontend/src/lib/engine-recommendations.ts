@@ -34,6 +34,9 @@ export const INSTALL_STATUS_PILL: Record<EngineInstallStatus, string> = {
   unknown: "status-pill--disabled",
 };
 
+/** Models screen, whose "Suggested for this machine" section answers which model to run. */
+export const MODEL_SUGGESTIONS_HREF = "#models";
+
 /** Suitable engines in rank order, and the unsuitable ones grouped separately. */
 export function splitRecommendations(items: EngineRecommendation[]): {
   suitable: EngineRecommendation[];
