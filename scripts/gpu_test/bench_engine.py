@@ -82,6 +82,11 @@ def run_benchmark(args: argparse.Namespace, client: Client, result: dict) -> Non
     if args.extensions:
         profile_body["engine_extensions"] = json.loads(args.extensions)
     result["stage"] = "create_profile"
+    try:  # record this machine so comparisons can verify the hardware matched
+        machine = client.call("PUT", "/machine-profiles/current", {})
+        profile_body["machine_profile_id"] = machine["id"]
+    except Exception:  # noqa: BLE001 - the benchmark is still valid without it
+        pass
     profile = unwrap(client.call("POST", "/engines", profile_body), "profile")
     if args.mode == "managed_process":
         result["stage"] = "managed_start"

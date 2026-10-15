@@ -186,6 +186,16 @@ def test_a_plan_runs_end_to_end_against_a_private_api(tmp_path: Path) -> None:
     assert result["metrics"]["request_latency_ms.p50"]["value"] is not None
 
 
+def test_the_run_records_this_machine_so_comparisons_can_check_hardware(tmp_path: Path) -> None:
+    with private_server(tmp_path / "data") as api:
+        client = headless.ApiClient(api)
+        run_plan(client, parse_plan(FAKE_PLAN))
+        machines = client.call("GET", "/machine-profiles")
+        engines = client.call("GET", "/engines")
+    assert len(machines) == 1
+    assert [engine["machine_profile_id"] for engine in engines] == [machines[0]["id"]]
+
+
 def test_bench_command_writes_the_result_and_gates_on_a_baseline(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

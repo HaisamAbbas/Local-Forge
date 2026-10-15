@@ -338,6 +338,12 @@ def run_plan(client: ApiClient, plan: dict[str, Any]) -> dict[str, Any]:
     if engine_spec["extensions"]:
         body["engine_extensions"] = engine_spec["extensions"]
     result: dict[str, Any] = {"schema": RESULT_SCHEMA, "label": plan["label"]}
+    # Record this machine so comparisons can tell the hardware matched; the run still works
+    # without it (the engine may run on another machine), so a failure here is not fatal.
+    try:
+        body["machine_profile_id"] = client.call("PUT", "/machine-profiles/current", {})["id"]
+    except (BenchError, KeyError, TypeError):
+        pass
     profile = _unwrap(client.call("POST", "/engines", body), "profile")
     started_managed = False
     try:
