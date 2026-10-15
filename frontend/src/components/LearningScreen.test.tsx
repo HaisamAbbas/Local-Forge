@@ -137,7 +137,7 @@ describe("learning screen", () => {
       within(guides).getByRole("heading", { name: "Output length versus TPOT" }),
     ).toBeInTheDocument();
     const build = within(guides).getAllByRole("link", { name: /Build this workload/ });
-    expect(build.length).toBe(10);
+    expect(build.length).toBe(11);
     for (const link of build) expect(link).toHaveAttribute("href", "#workloads");
     expect(
       within(guides).getAllByRole("link", { name: "Time to first token (TTFT)" })[0],

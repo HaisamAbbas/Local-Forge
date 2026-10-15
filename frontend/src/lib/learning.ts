@@ -16,7 +16,8 @@ import { findRunMetric, loadLevels } from "./run-measurements";
 
 export type GlossarySource = "client_measured" | "derived" | "engine_native" | "system_observed";
 
-export type GlossaryCategory = "latency" | "throughput" | "reliability" | "engine" | "system";
+export type GlossaryCategory =
+  "latency" | "throughput" | "reliability" | "engine" | "system" | "models";
 
 export const GLOSSARY_CATEGORIES: ReadonlyArray<{ id: GlossaryCategory; label: string }> = [
   { id: "latency", label: "Latency" },
@@ -24,6 +25,7 @@ export const GLOSSARY_CATEGORIES: ReadonlyArray<{ id: GlossaryCategory; label: s
   { id: "reliability", label: "Outcomes and errors" },
   { id: "engine", label: "Engine-reported (Ollama)" },
   { id: "system", label: "Machine resources" },
+  { id: "models", label: "Choosing a model" },
 ];
 
 export const SOURCE_LABELS: Record<GlossarySource, { label: string; description: string }> = {
@@ -656,6 +658,115 @@ const entries: GlossaryEntry[] = [
     related: ["host_memory_used_percent"],
     aliases: ["rss", "client memory"],
   },
+  // Choosing a model (a concept, not a recorded metric) ---------------------------------------
+  {
+    name: "model.q4_quantization_and_speed",
+    label: "Q4 quantization and why speed ≈ memory bandwidth ÷ model size",
+    category: "models",
+    unit: "tokens/s (estimate)",
+    source: "derived",
+    aggregations:
+      "not recorded per run; the Models screen estimates it from the median read speed of your completed runs",
+    summary:
+      "Q4 (4-bit) quantization stores each weight in about 4 bits instead of 16, so a model needs roughly 0.6 GB per billion parameters (a 7B model is about 4.5 GB) at a small quality cost. Generating each token reads essentially every active weight once, so on most local machines speed is limited by how fast memory can be read: tokens/s ≈ memory read speed ÷ model size. Halving the model size roughly doubles the speed.",
+    formula:
+      "estimated tokens/s = read speed (GB/s) ÷ Q4 model size (GB); read speed = median over completed local runs of (model size × measured generation tokens/s)",
+    movedBy: [
+      "Model size and quantization: Q8 is about twice the size of Q4 and about half the speed",
+      "Memory bandwidth: dual-channel laptop RAM reads ~20-90 GB/s, desktop GPUs ~300-1,000 GB/s, data-centre GPUs 2,000 GB/s or more",
+      "Mixture-of-experts models, which read only their active parameters per token",
+    ],
+    caveats: [
+      "An estimate, not a measurement: prompt processing (prefill), batching and engine overheads are not included. Benchmark the model to measure it.",
+      "The model must also fit in memory with room for the KV cache; one that spills from GPU memory into system RAM is far slower than the formula suggests.",
+    ],
+    related: ["generation_throughput_tokens_per_second", "tpot_ms_per_token"],
+    aliases: [
+      "quantization",
+      "q4",
+      "q4_k_m",
+      "gguf",
+      "memory bandwidth",
+      "model size",
+      "which model",
+    ],
+  },
+  // Output quality, targets and verdicts --------------------------------------------------------
+  {
+    name: "quality_pass_rate_percent",
+    label: "Quality pass rate",
+    category: "reliability",
+    unit: "%",
+    source: "derived",
+    aggregations: "run_rate (one value per run or concurrency level)",
+    summary:
+      "The share of checked outputs that passed every quality check enabled on the workload: exact match with a dataset's expected answer, valid JSON (optionally with required keys), stopped before the token limit, a maximum length, or text it must or must not contain. It answers 'did the faster setup still answer correctly?' for this workload only; it is not a general model-quality score.",
+    formula:
+      "100 * passed outputs / (passed + failed outputs); outputs that could not be checked (failed requests, missing expected answers or token counts) are excluded. Method localforge.quality.v1",
+    movedBy: [
+      "Model size and quantization: smaller or more aggressively quantized models make more mistakes",
+      "Sampling settings such as temperature",
+      "Output token limit: answers cut off at the limit fail 'stopped properly' and JSON checks",
+      "How clearly the prompts ask for the expected format",
+    ],
+    caveats: [
+      "Only recorded when the workload enables quality checks. The benchmark worker checks each output in memory; only pass/fail and reason codes are stored unless the plan retains content.",
+      "A verdict needs at least 5 checked outputs before it judges this rate.",
+    ],
+    related: ["error_rate_percent", "concept.targets_and_verdicts"],
+    aliases: ["quality", "accuracy", "exact match", "correctness", "pass rate", "quality smoke"],
+  },
+  {
+    name: "concept.targets_and_verdicts",
+    label: "Targets and verdicts: is this setup good enough?",
+    category: "reliability",
+    unit: "pass / miss / not enough data",
+    source: "derived",
+    aggregations: "not a recorded metric; evaluated on read for each finished run",
+    summary:
+      "Targets are limits saved with a plan that describe 'good enough' for your job, for example the first token within 5 s, generation of at least 15 tokens/s, at most 1% errors, or an 80% quality pass rate. Use-case presets (interactive chat, coding assistant, document Q&A, batch summarization, long context, quality smoke) fill in defaults you can edit or clear. Each finished run gets a verdict per target: Pass, Miss, or Not enough data.",
+    formula:
+      "per target: observed run summary compared with the limit (at most / at least); overall = 'Misses N targets' if any target misses, else 'Not enough data' if any is unknown, else 'Meets your targets'. Method localforge.verdict.v1",
+    movedBy: [
+      "Everything that moves the underlying metrics: prompt length, output length, model size, hardware and concurrency",
+      "Which use case the targets were chosen for: chat needs fast first tokens, batch jobs need throughput",
+    ],
+    caveats: [
+      "Not enough data means the metric was unavailable or had too few samples (p95 needs 20 requests, a quality pass rate needs 5 checked outputs). It is never counted as a pass or as zero.",
+      "A run is judged against the targets in force when it started; later edits apply to new runs.",
+    ],
+    related: ["ttft_ms", "request_latency_ms", "error_rate_percent", "quality_pass_rate_percent"],
+    aliases: ["target", "targets", "verdict", "good enough", "sla", "slo", "threshold", "use case"],
+  },
+  {
+    name: "concept.prefill_and_ttft",
+    label: "Prompt processing (prefill) and time to first token",
+    category: "latency",
+    unit: "s",
+    source: "derived",
+    aggregations: "not a recorded metric; estimated from earlier runs' prompt-processing rate",
+    summary:
+      "Before the first word appears, the engine must read the whole prompt (prefill). So time to first token is roughly prompt tokens ÷ prompt-processing rate, plus any model loading and queueing. On a CPU-only laptop at ~140 tokens/s an 8k-token coding-assistant prompt needs about a minute before anything appears, while a 300-token chat message takes about 2 s. GPUs process prompts many times faster.",
+    formula:
+      "expected first token (s) ≈ prompt tokens / prompt-processing rate (tokens/s), using ollama.prompt_eval_rate_tokens_per_second or the llama.cpp prompt-token counters from earlier completed runs of the same engine and model",
+    movedBy: [
+      "Context size: doubling the prompt roughly doubles prefill time",
+      "GPU vs CPU: prompt processing is compute-bound and much faster on GPUs",
+      "Model size: larger models process fewer prompt tokens per second",
+      "Prompt caching: a reused prompt prefix can skip most prefill (LocalForge avoids this in synthetic prompts)",
+    ],
+    caveats: [
+      "An estimate from earlier runs, not a measurement of the next one; the first request after a model load also pays the load time.",
+    ],
+    related: ["ttft_ms", "ollama.prompt_eval_rate_tokens_per_second"],
+    aliases: [
+      "prefill",
+      "prompt processing",
+      "context length",
+      "long context",
+      "first token estimate",
+    ],
+  },
 ];
 
 /** Every metric LocalForge records, keyed by persisted `metric_name`. */
@@ -960,6 +1071,24 @@ export const EXPERIMENT_GUIDES: readonly ExperimentGuide[] = [
       "ollama.load_duration",
     ],
     tip: "Use warmup requests so the second model's cold load does not distort the comparison.",
+  },
+  {
+    id: "classic_engine_fair",
+    kind: "classic",
+    presetId: "mixed_chat",
+    title: "Compare two engines fairly",
+    shape: "The same GGUF file served by two engines, each run 3 times with the Repeat option",
+    teaches:
+      "Engines ship different defaults. One may use 6 CPU threads and another 12, or offload layers to the GPU while the other does not; those settings can matter more than the engine itself. LocalForge records each run's runtime settings, the SHA-256 of the weights, and the laptop's power state, and the comparison names any difference.",
+    hypothesis:
+      "With identical threads, GPU layers and context size, engine ___ will generate about ___% faster than engine ___.",
+    changeOneAtATime: [
+      "Only the engine; set threads, GPU layers, context size and parallel slots to the same values on both",
+      "Keep the laptop plugged in and in the same power mode for every run",
+      "Check that Model weights shows Verified identical before reading the speed difference",
+    ],
+    watch: ["generation_throughput_tokens_per_second", "ttft_ms", "request_latency_ms"],
+    tip: "If the comparison says the runs differ in CPU threads or power state, fix that first; otherwise the speed difference may come from the settings, not the engine.",
   },
 ];
 
@@ -1828,4 +1957,47 @@ export function diagnoseRun(
         left.index - right.index,
     )
     .map(({ finding }) => finding);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Run-condition concepts (not metrics; shown next to run conditions and comparisons)
+// ---------------------------------------------------------------------------------------------
+
+export type ConditionConcept = { id: string; label: string; summary: string };
+
+export const RUN_CONDITION_CONCEPTS: readonly ConditionConcept[] = [
+  {
+    id: "runtime_settings",
+    label: "Engine runtime settings",
+    summary:
+      "How the engine was configured when the run started: CPU threads, GPU layers, context size, parallel slots, batch sizes, flash attention and KV cache type. Each value names where it was read (the engine's info routes, its command line, or LocalForge's own launch arguments). Values nobody reported stay 'not reported'; engine defaults are never assumed because they differ between engines and releases.",
+  },
+  {
+    id: "model_weights",
+    label: "Model weights (SHA-256)",
+    summary:
+      "A fingerprint of the exact weights file. Ollama names each weights blob after its SHA-256, and LocalForge hashes local GGUF files that llama.cpp or KoboldCpp loaded (once, then cached), so the same file served by different engines can be proven identical.",
+  },
+  {
+    id: "power_state",
+    label: "Power state",
+    summary:
+      "Whether the machine was on mains power or battery, battery saver, and the power plan or mode, read at the start and end of each run. Laptops slow down on battery and in power-saving modes, so runs with different power states are not directly comparable.",
+  },
+  {
+    id: "prompt_cache",
+    label: "Prompt cache",
+    summary:
+      "Engines can reuse work from a prompt they have seen before, which makes time to first token look much faster. LocalForge starts every synthetic prompt with a unique marker so this cannot happen by accident, and warns (prompt_cache_likely) when a measured request reused a cached prompt.",
+  },
+  {
+    id: "repeat_spread",
+    label: "Repeats and coefficient of variation",
+    summary:
+      "Running the same plan several times shows how much results move on their own. LocalForge reports the median, the min–max range, and the coefficient of variation (standard deviation ÷ mean); above 10% the metric is flagged unstable, so small differences between engines should not be trusted.",
+  },
+];
+
+export function conditionConcept(id: string): ConditionConcept | null {
+  return RUN_CONDITION_CONCEPTS.find((concept) => concept.id === id) ?? null;
 }

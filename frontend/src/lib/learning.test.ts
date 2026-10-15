@@ -103,9 +103,20 @@ describe("metric glossary", () => {
       "host_memory_available_bytes",
       "worker_process_cpu_percent",
       "worker_process_rss_bytes",
+      "quality_pass_rate_percent",
     ];
     for (const name of backendNames) expect(glossaryEntry(name)?.name).toBe(name);
-    expect(Object.keys(METRIC_GLOSSARY).sort()).toEqual([...backendNames].sort());
+    const recorded = Object.values(METRIC_GLOSSARY).filter(
+      (entry) => entry.category !== "models" && !entry.name.startsWith("concept."),
+    );
+    expect(recorded.map((entry) => entry.name).sort()).toEqual([...backendNames].sort());
+  });
+
+  it("explains Q4 quantization and the bandwidth / model size speed estimate", () => {
+    const concept = glossaryEntry("model.q4_quantization_and_speed");
+    expect(concept?.category).toBe("models");
+    expect(concept?.summary).toMatch(/memory read speed ÷ model size/);
+    expect(concept?.related.every((name) => glossaryEntry(name) !== null)).toBe(true);
   });
 
   it("gives each entry a formula, source and caveats, and links only to known entries", () => {
