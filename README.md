@@ -54,6 +54,36 @@ Latency metrics may not rise, and throughput may not fall, by more than `--toler
 Shared or battery-powered machines are noisy; gate on a dedicated, idle machine.
 `--api URL` uses an already running LocalForge instead of starting one.
 
+## Tune a llama.cpp launch
+
+`localforge tune` finds launch settings that suit this machine and model. Give it a plan for a
+managed llama.cpp (`executable_path` and a `.gguf` `model_path`); it starts the server with the
+engine's defaults, then changes one setting at a time (CPU threads, then GPU layers if a GPU is
+present, then batch size), running the same short benchmark each time. A change is kept only if it
+beats the current best by a margin (5% by default), so noise does not pick the winner.
+
+```json
+{
+  "label": "tune my llama.cpp",
+  "engine": {
+    "adapter": "localforge.llama_cpp",
+    "mode": "managed_process",
+    "endpoint": "http://127.0.0.1:9931",
+    "extensions": { "llama_cpp": { "executable_path": "D:/engines/llama-server.exe", "model_path": "D:/models/model.gguf" } }
+  },
+  "tune": { "objective": "throughput", "threads": [4, 8, 12], "min_gain_percent": 5 }
+}
+```
+
+```powershell
+localforge tune plan.json --out tuned.json
+```
+
+`objective` is `throughput` (generation speed, the default), `latency` (time to finish a request)
+or `ttft` (time to the first token). The result lists every trial and the recommended launch
+settings. Close other programs first: on a busy machine the trials are noisy. Exit codes: `0`
+completed, `1` the baseline run failed, `2` the plan is invalid.
+
 ## Build a release
 
 ```powershell
