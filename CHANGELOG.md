@@ -56,7 +56,8 @@
   fails on a regression against a saved baseline.
 - **`localforge tune plan.json`** finds the best launch settings (CPU threads, GPU layers, batch
   size) for a managed llama.cpp by benchmarking each candidate, keeping a change only when it
-  clearly beats the current best. Managed llama.cpp now also accepts a `threads` setting.
+  clearly beats the current best. Managed llama.cpp now also accepts a `threads` setting. The same tuner is on each managed
+  llama.cpp engine card in **Engines**, with progress, stop and an explicit "Apply".
 - A **GPU test kit** (`scripts/gpu_test`) and a CI job that benchmarks a real llama-server.
 
 ### Fixed

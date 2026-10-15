@@ -81,7 +81,7 @@ localforge tune plan.json --out tuned.json
 
 `objective` is `throughput` (generation speed, the default), `latency` (time to finish a request)
 or `ttft` (time to the first token). The result lists every trial and the recommended launch
-settings. Close other programs first: on a busy machine the trials are noisy. Exit codes: `0`
+settings. The same tuner is on each managed llama.cpp card in **Engines** ("Tune launch settings"): it runs on a private copy, shows progress, can be stopped, and only changes the profile when you click **Apply these settings**. Close other programs first: on a busy machine the trials are noisy. Exit codes: `0`
 completed, `1` the baseline run failed, `2` the plan is invalid.
 
 ## Build a release
