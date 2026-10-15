@@ -1,0 +1,627 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026.10.1",
+  "catalog_date": "2026-10-14",
+  "about": "Curated list of well-known open-weight models LocalForge can suggest. Sizes are typical 4-bit (Q4_K_M) downloads; they are not quality scores. Edit this file to update the list; docs/model-catalog.md explains every field.",
+  "models": [
+    {
+      "id": "qwen2.5-0.5b-instruct",
+      "name": "Qwen2.5 0.5B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 0.5,
+      "q4_size_gb": 0.4,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "qwen2.5:0.5b",
+        "gguf": { "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF", "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-1.5b-instruct",
+      "name": "Qwen2.5 1.5B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 1.5,
+      "q4_size_gb": 0.99,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "qwen2.5:1.5b",
+        "gguf": { "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF", "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-3b-instruct",
+      "name": "Qwen2.5 3B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 3.1,
+      "q4_size_gb": 1.9,
+      "context_tokens": 32768,
+      "license": "Qwen Research License",
+      "strengths": ["chat", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "qwen2.5:3b",
+        "gguf": { "repo": "Qwen/Qwen2.5-3B-Instruct-GGUF", "file": "qwen2.5-3b-instruct-q4_k_m.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-7b-instruct",
+      "name": "Qwen2.5 7B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 7.6,
+      "q4_size_gb": 4.7,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual", "coding"],
+      "sources": {
+        "ollama": "qwen2.5:7b",
+        "ollama_aliases": ["qwen2.5:latest"],
+        "gguf": { "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF", "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf" },
+        "openvino": "OpenVINO/Qwen2.5-7B-Instruct-int4-ov"
+      }
+    },
+    {
+      "id": "qwen2.5-14b-instruct",
+      "name": "Qwen2.5 14B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 14.7,
+      "q4_size_gb": 9.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual", "coding"],
+      "sources": {
+        "ollama": "qwen2.5:14b",
+        "gguf": { "repo": "bartowski/Qwen2.5-14B-Instruct-GGUF", "file": "Qwen2.5-14B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-32b-instruct",
+      "name": "Qwen2.5 32B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 32.8,
+      "q4_size_gb": 20.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual", "coding"],
+      "sources": {
+        "ollama": "qwen2.5:32b",
+        "gguf": { "repo": "bartowski/Qwen2.5-32B-Instruct-GGUF", "file": "Qwen2.5-32B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-72b-instruct",
+      "name": "Qwen2.5 72B Instruct",
+      "family": "Qwen2.5",
+      "publisher": "Alibaba Qwen",
+      "params_b": 72.7,
+      "q4_size_gb": 47.0,
+      "context_tokens": 32768,
+      "license": "Qwen License",
+      "strengths": ["chat", "multilingual", "coding"],
+      "sources": {
+        "ollama": "qwen2.5:72b",
+        "gguf": { "repo": "bartowski/Qwen2.5-72B-Instruct-GGUF", "file": "Qwen2.5-72B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-coder-1.5b-instruct",
+      "name": "Qwen2.5-Coder 1.5B Instruct",
+      "family": "Qwen2.5-Coder",
+      "publisher": "Alibaba Qwen",
+      "params_b": 1.5,
+      "q4_size_gb": 0.99,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["coding", "small_fast"],
+      "sources": {
+        "ollama": "qwen2.5-coder:1.5b",
+        "gguf": { "repo": "bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF", "file": "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-coder-7b-instruct",
+      "name": "Qwen2.5-Coder 7B Instruct",
+      "family": "Qwen2.5-Coder",
+      "publisher": "Alibaba Qwen",
+      "params_b": 7.6,
+      "q4_size_gb": 4.7,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["coding"],
+      "sources": {
+        "ollama": "qwen2.5-coder:7b",
+        "ollama_aliases": ["qwen2.5-coder:latest"],
+        "gguf": { "repo": "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", "file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-coder-14b-instruct",
+      "name": "Qwen2.5-Coder 14B Instruct",
+      "family": "Qwen2.5-Coder",
+      "publisher": "Alibaba Qwen",
+      "params_b": 14.7,
+      "q4_size_gb": 9.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["coding"],
+      "sources": {
+        "ollama": "qwen2.5-coder:14b",
+        "gguf": { "repo": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF", "file": "Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen2.5-coder-32b-instruct",
+      "name": "Qwen2.5-Coder 32B Instruct",
+      "family": "Qwen2.5-Coder",
+      "publisher": "Alibaba Qwen",
+      "params_b": 32.8,
+      "q4_size_gb": 20.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["coding"],
+      "sources": {
+        "ollama": "qwen2.5-coder:32b",
+        "gguf": { "repo": "bartowski/Qwen2.5-Coder-32B-Instruct-GGUF", "file": "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen3-0.6b",
+      "name": "Qwen3 0.6B",
+      "family": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "params_b": 0.6,
+      "q4_size_gb": 0.52,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "reasoning", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "qwen3:0.6b",
+        "gguf": { "repo": "bartowski/Qwen_Qwen3-0.6B-GGUF", "file": "Qwen_Qwen3-0.6B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen3-1.7b",
+      "name": "Qwen3 1.7B",
+      "family": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "params_b": 1.7,
+      "q4_size_gb": 1.4,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "reasoning", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "qwen3:1.7b",
+        "gguf": { "repo": "bartowski/Qwen_Qwen3-1.7B-GGUF", "file": "Qwen_Qwen3-1.7B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen3-4b",
+      "name": "Qwen3 4B",
+      "family": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "params_b": 4.0,
+      "q4_size_gb": 2.5,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "reasoning", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "qwen3:4b",
+        "gguf": { "repo": "bartowski/Qwen_Qwen3-4B-GGUF", "file": "Qwen_Qwen3-4B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen3-8b",
+      "name": "Qwen3 8B",
+      "family": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "params_b": 8.2,
+      "q4_size_gb": 5.2,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "reasoning", "multilingual", "coding"],
+      "sources": {
+        "ollama": "qwen3:8b",
+        "ollama_aliases": ["qwen3:latest"],
+        "gguf": { "repo": "bartowski/Qwen_Qwen3-8B-GGUF", "file": "Qwen_Qwen3-8B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen3-14b",
+      "name": "Qwen3 14B",
+      "family": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "params_b": 14.8,
+      "q4_size_gb": 9.3,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "reasoning", "multilingual", "coding"],
+      "sources": {
+        "ollama": "qwen3:14b",
+        "gguf": { "repo": "bartowski/Qwen_Qwen3-14B-GGUF", "file": "Qwen_Qwen3-14B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "qwen3-30b-a3b",
+      "name": "Qwen3 30B-A3B (mixture of experts)",
+      "family": "Qwen3",
+      "publisher": "Alibaba Qwen",
+      "params_b": 30.5,
+      "active_params_b": 3.3,
+      "q4_size_gb": 19.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "reasoning", "multilingual", "coding"],
+      "notes": "Only about 3B parameters are active per token, so it generates much faster than its size suggests, but all 30B must fit in memory.",
+      "sources": {
+        "ollama": "qwen3:30b",
+        "gguf": { "repo": "bartowski/Qwen_Qwen3-30B-A3B-GGUF", "file": "Qwen_Qwen3-30B-A3B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "llama-3.2-1b-instruct",
+      "name": "Llama 3.2 1B Instruct",
+      "family": "Llama 3.2",
+      "publisher": "Meta",
+      "params_b": 1.2,
+      "q4_size_gb": 0.81,
+      "ollama_size_gb": 1.3,
+      "context_tokens": 131072,
+      "license": "Llama 3.2 Community License",
+      "strengths": ["chat", "multilingual", "small_fast"],
+      "notes": "Ollama's default 1b tag is 8-bit (Q8_0), so its download is larger than the Q4 file.",
+      "sources": {
+        "ollama": "llama3.2:1b",
+        "gguf": { "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF", "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "llama-3.2-3b-instruct",
+      "name": "Llama 3.2 3B Instruct",
+      "family": "Llama 3.2",
+      "publisher": "Meta",
+      "params_b": 3.2,
+      "q4_size_gb": 2.0,
+      "context_tokens": 131072,
+      "license": "Llama 3.2 Community License",
+      "strengths": ["chat", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "llama3.2:3b",
+        "ollama_aliases": ["llama3.2:latest"],
+        "gguf": { "repo": "bartowski/Llama-3.2-3B-Instruct-GGUF", "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "llama-3.1-8b-instruct",
+      "name": "Llama 3.1 8B Instruct",
+      "family": "Llama 3.1",
+      "publisher": "Meta",
+      "params_b": 8.0,
+      "q4_size_gb": 4.9,
+      "context_tokens": 131072,
+      "license": "Llama 3.1 Community License",
+      "strengths": ["chat", "multilingual"],
+      "sources": {
+        "ollama": "llama3.1:8b",
+        "ollama_aliases": ["llama3.1:latest"],
+        "gguf": { "repo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF", "file": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "llama-3.3-70b-instruct",
+      "name": "Llama 3.3 70B Instruct",
+      "family": "Llama 3.3",
+      "publisher": "Meta",
+      "params_b": 70.6,
+      "q4_size_gb": 43.0,
+      "context_tokens": 131072,
+      "license": "Llama 3.3 Community License",
+      "strengths": ["chat", "multilingual", "coding"],
+      "sources": {
+        "ollama": "llama3.3:70b",
+        "ollama_aliases": ["llama3.3:latest"],
+        "gguf": { "repo": "bartowski/Llama-3.3-70B-Instruct-GGUF", "file": "Llama-3.3-70B-Instruct-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "gemma-2-2b-it",
+      "name": "Gemma 2 2B",
+      "family": "Gemma 2",
+      "publisher": "Google",
+      "params_b": 2.6,
+      "q4_size_gb": 1.6,
+      "context_tokens": 8192,
+      "license": "Gemma Terms of Use",
+      "strengths": ["chat", "small_fast"],
+      "sources": {
+        "ollama": "gemma2:2b",
+        "gguf": { "repo": "bartowski/gemma-2-2b-it-GGUF", "file": "gemma-2-2b-it-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "gemma-2-9b-it",
+      "name": "Gemma 2 9B",
+      "family": "Gemma 2",
+      "publisher": "Google",
+      "params_b": 9.2,
+      "q4_size_gb": 5.4,
+      "context_tokens": 8192,
+      "license": "Gemma Terms of Use",
+      "strengths": ["chat", "multilingual"],
+      "sources": {
+        "ollama": "gemma2:9b",
+        "ollama_aliases": ["gemma2:latest"],
+        "gguf": { "repo": "bartowski/gemma-2-9b-it-GGUF", "file": "gemma-2-9b-it-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "gemma-3-1b-it",
+      "name": "Gemma 3 1B",
+      "family": "Gemma 3",
+      "publisher": "Google",
+      "params_b": 1.0,
+      "q4_size_gb": 0.82,
+      "context_tokens": 32768,
+      "license": "Gemma Terms of Use",
+      "strengths": ["chat", "small_fast"],
+      "sources": {
+        "ollama": "gemma3:1b",
+        "gguf": { "repo": "bartowski/google_gemma-3-1b-it-GGUF", "file": "google_gemma-3-1b-it-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "gemma-3-4b-it",
+      "name": "Gemma 3 4B",
+      "family": "Gemma 3",
+      "publisher": "Google",
+      "params_b": 4.3,
+      "q4_size_gb": 3.3,
+      "context_tokens": 131072,
+      "license": "Gemma Terms of Use",
+      "strengths": ["chat", "multilingual", "small_fast"],
+      "notes": "Also accepts images; the Ollama download includes the vision encoder.",
+      "sources": {
+        "ollama": "gemma3:4b",
+        "ollama_aliases": ["gemma3:latest"],
+        "gguf": { "repo": "bartowski/google_gemma-3-4b-it-GGUF", "file": "google_gemma-3-4b-it-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "gemma-3-12b-it",
+      "name": "Gemma 3 12B",
+      "family": "Gemma 3",
+      "publisher": "Google",
+      "params_b": 12.2,
+      "q4_size_gb": 8.1,
+      "context_tokens": 131072,
+      "license": "Gemma Terms of Use",
+      "strengths": ["chat", "multilingual"],
+      "notes": "Also accepts images; the Ollama download includes the vision encoder.",
+      "sources": {
+        "ollama": "gemma3:12b",
+        "gguf": { "repo": "bartowski/google_gemma-3-12b-it-GGUF", "file": "google_gemma-3-12b-it-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "gemma-3-27b-it",
+      "name": "Gemma 3 27B",
+      "family": "Gemma 3",
+      "publisher": "Google",
+      "params_b": 27.4,
+      "q4_size_gb": 17.0,
+      "context_tokens": 131072,
+      "license": "Gemma Terms of Use",
+      "strengths": ["chat", "multilingual"],
+      "notes": "Also accepts images; the Ollama download includes the vision encoder.",
+      "sources": {
+        "ollama": "gemma3:27b",
+        "gguf": { "repo": "bartowski/google_gemma-3-27b-it-GGUF", "file": "google_gemma-3-27b-it-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "phi-3.5-mini-instruct",
+      "name": "Phi-3.5 mini Instruct",
+      "family": "Phi-3.5",
+      "publisher": "Microsoft",
+      "params_b": 3.8,
+      "q4_size_gb": 2.2,
+      "context_tokens": 131072,
+      "license": "MIT",
+      "strengths": ["chat", "reasoning", "small_fast"],
+      "sources": {
+        "ollama": "phi3.5:3.8b",
+        "ollama_aliases": ["phi3.5:latest"],
+        "gguf": { "repo": "bartowski/Phi-3.5-mini-instruct-GGUF", "file": "Phi-3.5-mini-instruct-Q4_K_M.gguf" },
+        "openvino": "OpenVINO/Phi-3.5-mini-instruct-int4-ov",
+        "onnx": "microsoft/Phi-3.5-mini-instruct-onnx"
+      }
+    },
+    {
+      "id": "phi-4-mini-instruct",
+      "name": "Phi-4-mini Instruct",
+      "family": "Phi-4",
+      "publisher": "Microsoft",
+      "params_b": 3.8,
+      "q4_size_gb": 2.5,
+      "context_tokens": 131072,
+      "license": "MIT",
+      "strengths": ["chat", "reasoning", "multilingual", "small_fast"],
+      "sources": {
+        "ollama": "phi4-mini:3.8b",
+        "ollama_aliases": ["phi4-mini:latest"],
+        "gguf": { "repo": "bartowski/microsoft_Phi-4-mini-instruct-GGUF", "file": "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf" },
+        "onnx": "microsoft/Phi-4-mini-instruct-onnx"
+      }
+    },
+    {
+      "id": "phi-4",
+      "name": "Phi-4 14B",
+      "family": "Phi-4",
+      "publisher": "Microsoft",
+      "params_b": 14.7,
+      "q4_size_gb": 9.1,
+      "context_tokens": 16384,
+      "license": "MIT",
+      "strengths": ["chat", "reasoning", "coding"],
+      "sources": {
+        "ollama": "phi4:14b",
+        "ollama_aliases": ["phi4:latest"],
+        "gguf": { "repo": "bartowski/phi-4-GGUF", "file": "phi-4-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "mistral-7b-instruct-v0.3",
+      "name": "Mistral 7B Instruct v0.3",
+      "family": "Mistral",
+      "publisher": "Mistral AI",
+      "params_b": 7.2,
+      "q4_size_gb": 4.4,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat"],
+      "sources": {
+        "ollama": "mistral:7b",
+        "ollama_aliases": ["mistral:latest"],
+        "gguf": { "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF", "file": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "mistral-nemo-12b-instruct",
+      "name": "Mistral Nemo 12B Instruct",
+      "family": "Mistral",
+      "publisher": "Mistral AI and NVIDIA",
+      "params_b": 12.2,
+      "q4_size_gb": 7.1,
+      "context_tokens": 131072,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual"],
+      "sources": {
+        "ollama": "mistral-nemo:12b",
+        "ollama_aliases": ["mistral-nemo:latest"],
+        "gguf": { "repo": "bartowski/Mistral-Nemo-Instruct-2407-GGUF", "file": "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "mistral-small-24b-instruct-2501",
+      "name": "Mistral Small 24B Instruct (2501)",
+      "family": "Mistral",
+      "publisher": "Mistral AI",
+      "params_b": 23.6,
+      "q4_size_gb": 14.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual", "coding"],
+      "sources": {
+        "ollama": "mistral-small:24b",
+        "gguf": { "repo": "bartowski/Mistral-Small-24B-Instruct-2501-GGUF", "file": "Mistral-Small-24B-Instruct-2501-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "mixtral-8x7b-instruct-v0.1",
+      "name": "Mixtral 8x7B Instruct (mixture of experts)",
+      "family": "Mixtral",
+      "publisher": "Mistral AI",
+      "params_b": 46.7,
+      "active_params_b": 12.9,
+      "q4_size_gb": 26.0,
+      "context_tokens": 32768,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "multilingual"],
+      "notes": "About 13B parameters are active per token, so it generates faster than a dense 47B model, but all of it must fit in memory.",
+      "sources": {
+        "ollama": "mixtral:8x7b",
+        "ollama_aliases": ["mixtral:latest"],
+        "gguf": { "repo": "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF", "file": "mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "deepseek-r1-distill-qwen-1.5b",
+      "name": "DeepSeek-R1 Distill Qwen 1.5B",
+      "family": "DeepSeek-R1 distill",
+      "publisher": "DeepSeek",
+      "params_b": 1.8,
+      "q4_size_gb": 1.1,
+      "context_tokens": 131072,
+      "license": "MIT",
+      "strengths": ["reasoning", "small_fast"],
+      "notes": "Writes a long chain of thought before answering, so replies need many more tokens than a chat model.",
+      "sources": {
+        "ollama": "deepseek-r1:1.5b",
+        "gguf": { "repo": "bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF", "file": "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "deepseek-r1-distill-qwen-7b",
+      "name": "DeepSeek-R1 Distill Qwen 7B",
+      "family": "DeepSeek-R1 distill",
+      "publisher": "DeepSeek",
+      "params_b": 7.6,
+      "q4_size_gb": 4.7,
+      "context_tokens": 131072,
+      "license": "MIT",
+      "strengths": ["reasoning"],
+      "notes": "Writes a long chain of thought before answering, so replies need many more tokens than a chat model.",
+      "sources": {
+        "ollama": "deepseek-r1:7b",
+        "gguf": { "repo": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF", "file": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "deepseek-r1-distill-qwen-14b",
+      "name": "DeepSeek-R1 Distill Qwen 14B",
+      "family": "DeepSeek-R1 distill",
+      "publisher": "DeepSeek",
+      "params_b": 14.8,
+      "q4_size_gb": 9.0,
+      "context_tokens": 131072,
+      "license": "MIT",
+      "strengths": ["reasoning", "coding"],
+      "notes": "Writes a long chain of thought before answering, so replies need many more tokens than a chat model.",
+      "sources": {
+        "ollama": "deepseek-r1:14b",
+        "gguf": { "repo": "bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF", "file": "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "deepseek-r1-distill-qwen-32b",
+      "name": "DeepSeek-R1 Distill Qwen 32B",
+      "family": "DeepSeek-R1 distill",
+      "publisher": "DeepSeek",
+      "params_b": 32.8,
+      "q4_size_gb": 20.0,
+      "context_tokens": 131072,
+      "license": "MIT",
+      "strengths": ["reasoning", "coding"],
+      "notes": "Writes a long chain of thought before answering, so replies need many more tokens than a chat model.",
+      "sources": {
+        "ollama": "deepseek-r1:32b",
+        "gguf": { "repo": "bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF", "file": "DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf" }
+      }
+    },
+    {
+      "id": "smollm2-1.7b-instruct",
+      "name": "SmolLM2 1.7B Instruct",
+      "family": "SmolLM2",
+      "publisher": "Hugging Face",
+      "params_b": 1.7,
+      "q4_size_gb": 1.06,
+      "ollama_size_gb": 1.8,
+      "context_tokens": 8192,
+      "license": "Apache-2.0",
+      "strengths": ["chat", "small_fast"],
+      "notes": "English-focused. Ollama's default tag is 8-bit (Q8_0), so its download is larger than the Q4 file.",
+      "sources": {
+        "ollama": "smollm2:1.7b",
+        "ollama_aliases": ["smollm2:latest"],
+        "gguf": { "repo": "bartowski/SmolLM2-1.7B-Instruct-GGUF", "file": "SmolLM2-1.7B-Instruct-Q4_K_M.gguf" }
+      }
+    }
+  ]
+}
