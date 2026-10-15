@@ -1556,3 +1556,68 @@ export const cancelModelPull = (id: string) =>
     method: "POST",
     body: "{}",
   });
+
+// --- Hardware fit (Hardware fit screen) ---
+// Detected hardware plus a per-model grade; the speeds are estimates, not benchmarks.
+export type FitTier = "perfect" | "good" | "marginal" | "too_tight";
+export type FitRunMode = "gpu" | "gpu_and_ram" | "cpu" | "none";
+export type HardwareFitAccelerator = {
+  name: string;
+  vendor: string | null;
+  memory_gb: number | null;
+  kind: "discrete" | "integrated" | "unified" | "unknown";
+  runtime: string | null;
+  driver_version: string | null;
+};
+export type HardwareFitMachine = {
+  summary: string;
+  os: string | null;
+  cpu_model: string | null;
+  cpu_logical_cores: number | null;
+  cpu_physical_cores: number | null;
+  memory_total_gb: number | null;
+  accelerators: HardwareFitAccelerator[];
+  accelerators_detected: boolean;
+  compute_path: "discrete_gpu" | "unified_memory" | "cpu_only";
+  compute_path_label: string;
+  gpu_budget_gb: number | null;
+  ram_budget_gb: number | null;
+  notes: string[];
+};
+export type HardwareFitModel = {
+  model_id: string;
+  name: string;
+  family: string;
+  publisher: string;
+  params_b: number;
+  active_params_b: number | null;
+  context_tokens: number;
+  license: string;
+  strengths: string[];
+  notes: string | null;
+  quantization: string;
+  quantization_bits: number;
+  lower_quality: boolean;
+  size_gb: number;
+  memory_required_gb: number;
+  run_mode: FitRunMode;
+  tier: FitTier;
+  tokens_per_second: number | null;
+  speed_basis: ModelSpeedBasis;
+  speed_label: string;
+  score: number;
+  explanation: string;
+  downloaded: boolean;
+  sources: ModelSuggestion["sources"];
+};
+export type HardwareFitResult = {
+  generated_at: string;
+  catalog_version: string;
+  method: string;
+  detected_by: string;
+  machine: HardwareFitMachine;
+  models: HardwareFitModel[];
+};
+
+export const fetchHardwareFit = (refresh = false) =>
+  apiRequest<HardwareFitResult>(`/api/v1/hardware-fit${refresh ? "?refresh=true" : ""}`);
