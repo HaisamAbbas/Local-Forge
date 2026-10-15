@@ -1,4 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect x="4" y="4" width="56" height="56" rx="14" fill="#08090a" stroke="#2f3336" stroke-width="2" />
-  <text x="32" y="41" text-anchor="middle" fill="#7cc4ff" font-family="Arial, sans-serif" font-size="23" font-weight="700">LF</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="LocalForge">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2012" />
+      <stop offset="1" stop-color="#080907" />
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e3f59a" />
+      <stop offset="1" stop-color="#a9c94a" />
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#cbe968" stop-opacity="0.35" />
+      <stop offset="1" stop-color="#e9f9b0" />
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)" />
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#2f3a1c" stroke-width="4" />
+  <!-- benchmark bars rising out of the forge -->
+  <rect x="196" y="196" width="40" height="76" rx="12" fill="url(#bar)" />
+  <rect x="256" y="148" width="40" height="124" rx="12" fill="url(#bar)" />
+  <rect x="316" y="100" width="40" height="172" rx="12" fill="url(#bar)" />
+  <circle cx="148" cy="214" r="9" fill="#e9f9b0" />
+  <circle cx="118" cy="176" r="6" fill="#cbe968" opacity="0.8" />
+  <circle cx="170" cy="168" r="5" fill="#cbe968" opacity="0.6" />
+  <!-- anvil -->
+  <path
+    fill="url(#metal)"
+    d="M64 296 H408 Q432 296 432 320 V340 H376 Q356 340 354 356 V372 H396 Q412 372 412 388 V408 H156 V388 Q156 372 172 372 H214 V356 Q212 340 192 340 H168 Q96 336 64 312 Z"
+  />
+  <path fill="#7e9a2f" opacity="0.35" d="M214 372 H354 V356 H214 Z" />
 </svg>
