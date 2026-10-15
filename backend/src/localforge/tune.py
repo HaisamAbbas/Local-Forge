@@ -66,6 +66,16 @@ Settings = dict[str, Any]
 Evaluator = Callable[[Settings], dict[str, Any]]
 
 
+class TuneCancelled(Exception):
+    """The caller asked the search to stop; the trials so far are still reported."""
+
+
+def trial_count(space: dict[str, list[Any]]) -> int:
+    """How many benchmark runs a search over this space makes (the defaults, then each value)."""
+
+    return 1 + sum(len(space.get(key, [])) for key in SETTINGS_ORDER)
+
+
 def default_search_space(
     *, logical_cores: int | None, physical_cores: int | None, has_gpu: bool
 ) -> dict[str, list[Any]]:
@@ -156,13 +166,20 @@ def coordinate_search(
     *,
     objective: str,
     min_gain_percent: float,
+    on_trial: Callable[[dict[str, Any]], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    """Tune one setting at a time. ``evaluate(settings)`` returns a bench result for them."""
+    """Tune one setting at a time. ``evaluate(settings)`` returns a bench result for them.
+
+    ``on_trial`` is called with each finished trial; ``should_stop`` is checked before each one.
+    """
 
     metric_key, higher_is_better, _ = OBJECTIVES[objective]
     trials: list[dict[str, Any]] = []
 
     def measure(settings: Settings, changed: str | None) -> float | None:
+        if should_stop is not None and should_stop():
+            raise TuneCancelled
         entry: dict[str, Any] = {"settings": dict(settings), "changed": changed}
         try:
             result = evaluate(dict(settings))
@@ -180,6 +197,8 @@ def coordinate_search(
                 error=None if score is not None else "the run produced no measurements",
             )
         trials.append(entry)
+        if on_trial is not None:
+            on_trial(entry)
         score = entry["score"]
         return score if isinstance(score, (int, float)) else None
 

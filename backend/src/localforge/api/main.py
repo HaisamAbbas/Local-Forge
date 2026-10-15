@@ -40,6 +40,7 @@ from localforge.api.schemas import LocalSessionResponse
 from localforge.api.settings import router as settings_router
 from localforge.api.settings import visible_catalog_manifests
 from localforge.api.targets import router as targets_router
+from localforge.api.tunes import router as tune_router
 from localforge.api.workloads import router as workload_router
 from localforge.core.models import EngineIntegrationMode, EngineProfile, EngineProfileStatus
 from localforge.metrics import backfill_engine_native_metrics_for_finalized_runs
@@ -440,6 +441,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     application.include_router(recommendation_router)
     application.include_router(model_suggestion_router)
     application.include_router(hardware_fit_router)
+    application.include_router(tune_router)
     application.include_router(profile_router)
     application.include_router(playground_router)
     application.include_router(workload_router)
