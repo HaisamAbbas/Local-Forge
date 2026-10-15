@@ -12,7 +12,8 @@ export default defineConfig({
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: "list",
+  // The github reporter also turns failures into annotations that are readable without logs.
+  reporter: process.env.CI ? [["list"], ["github"]] : "list",
   use: {
     baseURL: "http://127.0.0.1:15174",
     trace: "retain-on-failure",
