@@ -23,9 +23,11 @@ from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
 from localforge.adapters.contracts import AdapterManifest, AdapterProcessHandle
 from localforge.api.experiments import router as experiment_router
+from localforge.api.model_suggestions import router as model_suggestion_router
 from localforge.api.playground import router as playground_router
 from localforge.api.profiles import router as profile_router
 from localforge.api.recommendations import router as recommendation_router
+from localforge.api.repeats import router as repeat_router
 from localforge.api.runs import (
     monitor_run_workers,
     shutdown_run_workers,
@@ -36,6 +38,7 @@ from localforge.api.runs import (
 from localforge.api.schemas import LocalSessionResponse
 from localforge.api.settings import router as settings_router
 from localforge.api.settings import visible_catalog_manifests
+from localforge.api.targets import router as targets_router
 from localforge.api.workloads import router as workload_router
 from localforge.core.models import EngineIntegrationMode, EngineProfile, EngineProfileStatus
 from localforge.metrics import backfill_engine_native_metrics_for_finalized_runs
@@ -252,6 +255,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         finally:
             worker_monitor.cancel()
             await asyncio.gather(worker_monitor, return_exceptions=True)
+            pull_manager = getattr(application.state, "model_pull_manager", None)
+            if pull_manager is not None:
+                await pull_manager.close()  # Closing the streams stops Ollama's downloads.
             await shutdown_run_workers(application)
             process_handles = cast(
                 dict[UUID, AdapterProcessHandle], application.state.engine_process_handles
@@ -292,17 +298,26 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def protect_local_mutations(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            if not is_loopback_request_host(request.url.hostname):
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "detail": {
-                            "code": "loopback_only",
-                            "message": "Mutations are available only through a loopback host.",
-                        }
-                    },
-                )
+        mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        if not is_loopback_request_host(request.url.hostname):
+            # Refuse every request, not only mutations. A page on another site can make a
+            # browser send requests to this port under its own hostname (DNS rebinding); without
+            # this it could read the session token, run history and settings.
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": {
+                        "code": "loopback_only",
+                        "message": (
+                            "Mutations are available only through a loopback host."
+                            if mutating
+                            else "LocalForge answers only requests addressed to a loopback "
+                            "host (127.0.0.1 or localhost)."
+                        ),
+                    }
+                },
+            )
+        if mutating:
             origin = request.headers.get("origin")
             if origin is not None and not is_loopback_origin(origin):
                 return JSONResponse(
@@ -422,11 +437,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     # Before the profile router so "/engines/recommendations" is not read as a profile id.
     application.include_router(recommendation_router)
+    application.include_router(model_suggestion_router)
     application.include_router(profile_router)
     application.include_router(playground_router)
     application.include_router(workload_router)
+    application.include_router(targets_router)
     application.include_router(run_router)
     application.include_router(experiment_router)
+    application.include_router(repeat_router)
     application.include_router(settings_router)
     application.add_middleware(
         DatasetUploadBodyLimitMiddleware,
