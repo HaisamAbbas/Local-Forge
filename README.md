@@ -12,7 +12,8 @@ OpenVINO GenAI, ONNX Runtime GenAI, NVIDIA Dynamo, and a generic OpenAI-compatib
 with TensorRT-LLM and ExLlamaV3 are cataloged as planned and unavailable. The deterministic fake
 engine is for workflow tests only: it does not load a model and its timings are not
 model-performance measurements. Real endpoint requests are sent by the evaluator machine's local
-API to the configured endpoint. Ordinary checks do not download models or contact public endpoints.
+API to the configured endpoint. Ordinary checks do not download models or contact public endpoints;
+a model is downloaded only when the user confirms **Pull with Ollama** on the Models screen.
 
 ## Install and run (users)
 
@@ -27,6 +28,31 @@ That starts LocalForge on `http://127.0.0.1:8000` (or a free port) and opens it 
 `uv tool install localforge-inference-lab` keeps a `localforge` command installed instead. Options:
 `--port`, `--data-dir`, `--no-browser`, `--version`. Before the package is on PyPI, point uv at a
 release wheel: `uvx --from <path-or-URL-to-wheel> localforge`.
+
+## Benchmark from a script or CI
+
+`localforge bench` runs a plan without the browser. It starts a private LocalForge on a free
+loopback port, runs the plan, prints the measurements as JSON, and stops it again.
+
+```json
+{
+  "label": "llama.cpp regression check",
+  "engine": { "adapter": "localforge.llama_cpp", "endpoint": "http://127.0.0.1:8080" },
+  "model": "*",
+  "workload": { "preset": "mixed_chat", "requests": 20, "concurrency": 1, "max_output_tokens": 128 }
+}
+```
+
+```powershell
+localforge bench plan.json --out result.json                      # record a baseline
+localforge bench plan.json --baseline result.json --tolerance 10  # fail on a >10% regression
+```
+
+Exit codes: `0` the run completed and stayed within tolerance, `1` it failed or regressed (a
+metric the baseline had but the run lacks also fails), `2` the plan or arguments are invalid.
+Latency metrics may not rise, and throughput may not fall, by more than `--tolerance` percent.
+Shared or battery-powered machines are noisy; gate on a dedicated, idle machine.
+`--api URL` uses an already running LocalForge instead of starting one.
 
 ## Build a release
 
@@ -95,6 +121,18 @@ changes through `POST /api/v1/benchmark-plans/{plan_id}/clone`; workload changes
 so the source plan and workload are never edited. `GET /api/v1/models` lists model artifacts across
 engine profiles. Saved reports are listed at `GET /api/v1/reports`, downloaded at
 `/api/v1/reports/{report_id}/download`, and removed with `DELETE /api/v1/reports/{report_id}`.
+Use-case presets (`interactive_chat`, `coding_assistant`, `document_qa`, `batch_summarization`,
+`long_context_stress`, `quality_smoke`) are listed with their descriptions and default targets at
+`GET /api/v1/workload-presets/use-cases` and created through `/api/v1/workloads/presets`. A plan
+saves optional `targets` (omitted: the use-case defaults; `null`: none) and they can be replaced with
+`PUT /api/v1/benchmark-plans/{plan_id}/targets`. `GET /api/v1/runs/{run_id}/verdict` evaluates a run
+against the targets captured when it started: each target is `pass`, `fail`, or `unknown` (missing
+metric or too few samples, never treated as a pass or zero), with plain-language explanations that
+quote the run's own numbers. `GET /api/v1/prefill-estimate?engine_profile_id=&model_artifact_id=&input_tokens=`
+estimates first-token time from prompt-processing rates measured in earlier completed runs. Workloads
+may opt in to `quality_checks` (exact match against dataset expected answers, valid JSON with optional
+required keys, stopped before the token limit, maximum length, contains / does not contain); outputs
+are checked in memory and only the outcome and reason codes are stored unless retention is enabled.
 Metric formulas, provenance, percentile minimums, and quality flags are documented in
 [`docs/metrics.md`](docs/metrics.md).
 Local API protection, data retention, path handling, process ownership, and recovery limits are
@@ -153,8 +191,27 @@ choose **Ollama**, keep **Attached endpoint**, and use the local server URL (def
 `http://127.0.0.1:11434`). Probe the server, then select one of the locally listed models in
 **Workloads**. LOCALFORGE checks `/`, `/api/version`, and `/api/tags`; chat requests use
 `/api/chat`. The adapter filters remote-backed entries from inventory and refuses to run a model it
-cannot verify as local. It never calls Ollama's pull or delete operations, and it never starts or
-stops an Ollama process.
+cannot verify as local. The adapter never calls Ollama's pull or delete operations, and it never
+starts or stops an Ollama process.
+
+### Choose a model
+
+**Models** opens with "Suggested for this machine": a curated catalog of well-known open models
+(Qwen, Llama, Gemma, Phi, Mistral, DeepSeek-R1 distills, SmolLM2 and coding models, 0.5B-70B),
+ranked per use case (chat, coding, document Q&A, small and fast, reasoning) by memory fit, estimated
+speed on this machine, and what is already downloaded. Speeds are estimates: generation speed is
+roughly memory read speed divided by model size, measured from your completed runs when there are
+any, otherwise a rough GPU-bandwidth figure or unknown. The catalog never claims quality scores.
+`GET /api/v1/models/suggestions?use_case=chat` returns the same ranking, and `localforge recommend`
+prints the top three for chat and coding.
+
+**Pull with Ollama** is the only way LocalForge starts a download, and only after you confirm the
+download size in the page: `POST /api/v1/models/pull` (`engine_profile_id`, `ollama_tag`,
+`confirm: true`) asks your local, enabled Ollama profile to pull the tag; the network download to
+`registry.ollama.ai` is made by Ollama. Progress is at `GET /api/v1/models/pulls/{id}`, cancel with
+`POST /api/v1/models/pulls/{id}/cancel`, and the engine is re-probed afterwards so the model appears
+in its inventory. For llama.cpp and KoboldCpp, **Get the GGUF** links to the Hugging Face file. See
+[`docs/model-catalog.md`](docs/model-catalog.md) for the catalog format and ranking rules.
 
 The stored runtime version identifies the Ollama server. The underlying runner remains explicitly
 unknown unless the server exposes verified runner details; model family or file format is not used

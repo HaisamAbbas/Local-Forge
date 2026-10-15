@@ -100,6 +100,29 @@ runs with stored per-request engine-native records, missing summary rows are rec
 stored request samples and raw records with the same method and appended. Existing rows are never
 modified, and repeating the backfill adds nothing.
 
+## Output quality and verdicts
+
+Quality checks are opt-in per workload (`quality_checks`). The worker evaluates each measured
+output in memory with method `localforge.quality.v1` and stores only `quality_outcome`
+(`pass`, `fail`, `unknown`) and stable reason codes on the request sample; the output text is
+stored only when the plan enables content retention. Exact match normalizes code fences,
+wrapping quotes, case, whitespace, and trailing punctuation; expected answers that are JSON
+objects or arrays compare as parsed JSON. "Stopped properly" fails when the engine-reported
+output token count reaches the request token limit and is `unknown` without a token count.
+Requests that did not complete are `unknown` (they count toward the error rate instead).
+
+`quality_pass_rate_percent` (source `derived`, aggregation `run_rate`) is
+`100 * passed / (passed + failed)`; `sample_count` is the number of checked outputs, unchecked
+outputs are excluded and flagged `some_outputs_not_evaluated`. The row exists only for runs
+with checks enabled.
+
+Run verdicts (`localforge.verdict.v1`, `GET /api/v1/runs/{run_id}/verdict`) are computed on read
+from the persisted summaries: `ttft_ms` p50/p95, `request_latency_ms` p50,
+`generation_throughput_tokens_per_second`, `request_throughput_requests_per_second`,
+`error_rate_percent`, and `quality_pass_rate_percent`. A target is `unknown` when its metric is
+missing, null (for example a p95 with fewer than 20 samples), or a quality pass rate covers
+fewer than 5 checked outputs. For a concurrency sweep the highest level is judged.
+
 ## Comparing runs
 
 Run comparisons pair only run-level metrics whose name, unit, source, aggregation, definition,

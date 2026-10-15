@@ -23,6 +23,20 @@ references to a supported operating-system credential store. The OpenAI-compatib
 ambient proxy settings and redirects so the credential and request are sent only to the configured
 endpoint.
 
+## Model downloads
+
+LOCALFORGE never downloads model weights itself and never starts a download without an explicit
+request. On **Models**, **Pull with Ollama** shows the download size and asks for confirmation in
+the page; only then does the UI call `POST /api/v1/models/pull` with `confirm: true` and the session
+token. The API refuses remote and disabled profiles, non-Ollama profiles, and tags outside the
+curated catalog unless the request also marks the tag as a confirmed custom tag. The request goes
+to the user's own local Ollama (`POST /api/pull`), and **Ollama** then opens network connections to
+its registry (`registry.ollama.ai`, or the host named in a custom tag) to fetch the files into its
+own model directory. Cancelling, or stopping the API, closes that stream, which stops the download;
+partial layers stay in Ollama's cache. Model suggestions only read local state and call Ollama's
+read-only `GET /api/tags`; the **Get the GGUF** action is a plain link to Hugging Face that the
+browser opens.
+
 ## Retention, diagnostics, and reports
 
 Dataset content and benchmark prompt/output text are not retained by default. Dataset previews,
