@@ -248,6 +248,7 @@ def _managed_config(
                     "batch_size": 2048,
                     "ubatch_size": 512,
                     "gpu_layers": "all",
+                    "threads": 6,
                     "model_id": "fixture alias",
                 }
             },
@@ -615,6 +616,7 @@ def test_managed_start_uses_owned_pid_and_only_accepts_its_process_handle(
                 ("--port", "9931"),
                 ("--ctx-size", "4096"),
                 ("--parallel", "2"),
+                ("--threads", "6"),
                 ("--batch-size", "2048"),
                 ("--ubatch-size", "512"),
                 ("--gpu-layers", "all"),

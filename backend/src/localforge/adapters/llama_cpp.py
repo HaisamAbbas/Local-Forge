@@ -62,6 +62,7 @@ _EXTENSION_KEYS = {
     "working_directory",
     "context_size",
     "parallelism",
+    "threads",
     "batch_size",
     "ubatch_size",
     "gpu_layers",
@@ -100,6 +101,7 @@ _MANAGED_KEYS = {
     "working_directory",
     "context_size",
     "parallelism",
+    "threads",
     "batch_size",
     "ubatch_size",
     "gpu_layers",
@@ -357,6 +359,7 @@ class LlamaCppEngineAdapter:
                                     "working_directory": {"type": "string"},
                                     "context_size": {"type": "integer", "minimum": 1},
                                     "parallelism": {"type": "integer", "minimum": 1},
+                                    "threads": {"type": "integer", "minimum": 1},
                                     "batch_size": {"type": "integer", "minimum": 1},
                                     "ubatch_size": {"type": "integer", "minimum": 1},
                                     "gpu_layers": {"type": ["integer", "string"]},
@@ -598,6 +601,7 @@ class LlamaCppEngineAdapter:
         for key, maximum in (
             ("context_size", 1_048_576),
             ("parallelism", 1024),
+            ("threads", 1024),
             ("batch_size", 1_000_000),
             ("ubatch_size", 1_000_000),
         ):
@@ -1130,6 +1134,7 @@ class LlamaCppEngineAdapter:
             "startup_timeout_seconds",
             "context_size",
             "parallelism",
+            "threads",
             "batch_size",
             "ubatch_size",
             "gpu_layers",
@@ -1185,6 +1190,7 @@ class LlamaCppEngineAdapter:
         option_map = (
             ("context_size", "--ctx-size"),
             ("parallelism", "--parallel"),
+            ("threads", "--threads"),
             ("batch_size", "--batch-size"),
             ("ubatch_size", "--ubatch-size"),
         )
