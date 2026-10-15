@@ -172,6 +172,11 @@ def canned_recommendations(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
         return response
 
     monkeypatch.setattr(recommendations, "recommend_for_data_directory", fake)
+
+    async def no_ollama(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        return {}  # the "Models to try" section must not contact a real local Ollama
+
+    monkeypatch.setattr("localforge.model_catalog.fetch_ollama_tags", no_ollama)
     return requested
 
 
@@ -267,3 +272,16 @@ def test_startup_recommendations_fail_silently(
     monkeypatch.setattr(recommendations, "recommend_for_data_directory", slow)
     monkeypatch.setattr(cli, "STARTUP_RECOMMENDATION_SECONDS", 0.05)
     assert REAL_STARTUP_LINES(tmp_path, False, 8123) == []
+
+
+def test_bench_subcommand_is_dispatched_with_its_own_arguments(
+    monkeypatch: pytest.MonkeyPatch, uvicorn_calls: list[dict[str, Any]]
+) -> None:
+    import localforge.headless as headless
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(headless, "bench_main", lambda argv: seen.append(list(argv)) or 7)
+
+    assert cli.main(["bench", "plan.json", "--tolerance", "5"]) == 7
+    assert seen == [["plan.json", "--tolerance", "5"]]
+    assert uvicorn_calls == []

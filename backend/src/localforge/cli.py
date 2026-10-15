@@ -10,10 +10,14 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from localforge import __version__
 from localforge.core.urls import is_loopback_host
 from localforge.web_ui import bundled_ui_directory
+
+if TYPE_CHECKING:
+    from localforge.recommendations import RecommendationResponse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -52,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"localforge {__version__}")
     parser.epilog = (
         "Run `localforge recommend` to rank inference engines for this machine "
-        "(add --json for machine-readable output)."
+        "(add --json for machine-readable output), or `localforge bench plan.json` to run a "
+        "benchmark from a file without the browser (for scripts and CI)."
     )
     return parser
 
@@ -149,7 +154,24 @@ def recommend_main(argv: Sequence[str]) -> int:
     else:
         for line in render_text(response):
             _print(line)
+        for line in _model_suggestion_lines(_data_directory(args.data_dir), response):
+            _print(line)
     return 0
+
+
+def _model_suggestion_lines(data_directory: Path, response: "RecommendationResponse") -> list[str]:
+    """The "Models to try" section (top 3 for chat and coding); empty if it cannot be built."""
+
+    try:
+        from localforge import model_catalog
+
+        suggestions = model_catalog.suggestions_for_data_directory(
+            data_directory,
+            response,
+        )
+        return ["", *model_catalog.render_model_suggestions_text(suggestions, limit=3)]
+    except Exception:
+        return []
 
 
 STARTUP_RECOMMENDATION_SECONDS = 3.0
@@ -194,6 +216,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["recommend"]:
         return recommend_main(arguments[1:])
+    if arguments[:1] == ["bench"]:
+        from localforge.headless import bench_main
+
+        return bench_main(arguments[1:])
     parser = build_parser()
     args = parser.parse_args(arguments)
     if not is_loopback_host(args.host):
