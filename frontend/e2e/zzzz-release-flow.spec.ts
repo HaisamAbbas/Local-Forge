@@ -76,7 +76,9 @@ test("completes the model-free release workflow from local setup through redacte
   await expect(
     page.getByText("Detection is best effort. Missing values are not inferred."),
   ).toBeVisible();
-  await expect(page.locator(".facts-grid").getByText("Accelerators", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".facts-grid").getByText("Accelerators", { exact: true }),
+  ).toBeVisible();
 
   // 3. Register, probe, and enable the deterministic fake engine without loading a model.
   const profileId = await registerAndEnableFakeEngine(page, profileName);
