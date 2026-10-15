@@ -13,6 +13,9 @@
   llama.cpp, KoboldCpp, vLLM and others), then adds, probes and enables them. Each engine card
   shows a next-steps checklist (Added, Probed, Enabled, Playground, Benchmark), and Benchmark and
   Playground open with the engine and its model already chosen.
+- **Hardware fit tab.** Detects this machine and grades every catalog model for it: the best
+  quantization that fits, where it would run (GPU, GPU plus RAM, CPU), an estimated speed and a
+  Perfect, Good, Marginal or Too large rating. Filterable, with a "Detect again" button.
 - **Model suggestions.** A curated catalog of 39 open models, ranked for this machine's memory
   and the model-read speed measured in your own runs. Ollama models can be pulled with an
   explicit, in-page confirmation. Downloads are limited to Ollama's registry and Hugging Face.

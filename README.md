@@ -194,6 +194,18 @@ choose **Ollama**, keep **Attached endpoint**, and use the local server URL (def
 cannot verify as local. The adapter never calls Ollama's pull or delete operations, and it never
 starts or stops an Ollama process.
 
+### See which models fit this hardware
+
+**Hardware fit** detects this machine (processor and cores, system memory, graphics and how much
+memory models can use) and grades every catalog model for it. For each model it picks the best
+quantization the machine can hold (Q8_0 down to Q2_K, using Q3 or Q2 only when nothing better
+fits), says where it would run (GPU memory, GPU plus system RAM, or CPU and RAM), and rates it
+*Perfect fit*, *Good fit*, *Marginal* or *Too large*. Filter by use, by what runs well, by what is
+already downloaded, or search by name. **Detect again** rescans the hardware.
+`GET /api/v1/hardware-fit` returns the same data (`?refresh=true` rescans). Speeds are estimates, not
+benchmarks, and the grade assumes typical memory speed until you have benchmarked a model here. See
+[`docs/hardware-fit.md`](docs/hardware-fit.md) for the rules.
+
 ### Choose a model
 
 **Models** opens with "Suggested for this machine": a curated catalog of well-known open models
