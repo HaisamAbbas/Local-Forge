@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1
+
+- **Hardware fit tab.** Detects this machine and grades every catalog model for it: best
+  quantization, where it would run (GPU, GPU plus RAM, CPU), estimated speed, and a Perfect,
+  Good, Marginal or Too large rating.
+- **Tune launch settings.** `localforge tune plan.json` and a panel on each managed llama.cpp
+  engine card find the best CPU threads, GPU layers and batch size by benchmarking each candidate.
+  Managed llama.cpp accepts a `threads` setting.
+- **New app icon**, in the browser tab, the sidebar and the README, and a cover image for Hardware fit.
+- Benchmark runs from `localforge bench` and the GPU test kit now record this machine, so
+  comparisons can check the hardware matched.
+- Fixed the Linux type check and a browser test that failed on machines without a GPU, so CI is
+  green.
+
 ## 0.2.0
 
 ### Find the right engine and model for this machine
