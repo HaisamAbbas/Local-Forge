@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiStatus } from "./components/ApiStatus";
+import { HardwareFitScreen } from "./components/HardwareFitScreen";
 import { ExperimentsScreen } from "./components/ExperimentsScreen";
 import { LearningScreen } from "./components/LearningScreen";
 import { ModelsScreen } from "./components/ModelsScreen";
@@ -26,6 +27,11 @@ const navigation = [
     id: "models",
     label: "Models",
     description: "See every model your connected engines report, with format, size, and context.",
+  },
+  {
+    id: "fit",
+    label: "Hardware fit",
+    description: "Detect this machine and see which language models it can run, and how well.",
   },
   {
     id: "playground",
@@ -173,6 +179,8 @@ export function App() {
             <ExperimentsScreen />
           ) : activeScreen === "models" ? (
             <ModelsScreen />
+          ) : activeScreen === "fit" ? (
+            <HardwareFitScreen />
           ) : activeScreen === "reports" ? (
             <ReportsScreen />
           ) : activeScreen === "learning" ? (
