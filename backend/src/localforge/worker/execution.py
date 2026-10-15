@@ -1,6 +1,7 @@
 """Run one persisted benchmark in the isolated LOCALFORGE worker process."""
 
 import asyncio
+import itertools
 import json
 import os
 import random
@@ -52,6 +53,8 @@ from localforge.metrics import (
     evaluate_native_metric_snapshots,
     native_metric_snapshot_samples,
 )
+from localforge.quality import RequestQualityCheck, request_quality_factory
+from localforge.run_conditions.capture import RunConditionsCapture
 from localforge.runs import (
     ACTIVE_RUN_STATUSES,
     emit_run_event,
@@ -310,28 +313,34 @@ _SYNTHETIC_WORDS = (
 )
 
 
-def _synthetic_prompt(workload: Workload, index: int) -> str:
-    """Build a repeatable approximate input with the configured seed and size method."""
+def _synthetic_prompt(workload: Workload, index: int, *, marker: str | None = None) -> str:
+    """Build a repeatable approximate input with the configured seed and size method.
+
+    A ``marker`` is placed at the very start so engine prefix caches cannot reuse an earlier
+    request; the seeded body after it stays repeatable.
+    """
 
     rng = random.Random(workload.random_seed + index)
     target = workload.target_input_tokens
+    prefix = f"[{marker}] " if marker else ""
     if workload.prompt_sizing_method is PromptSizingMethod.WORDS:
         word_count = target if target is not None else 12
-        return " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(word_count))
+        return prefix + " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(word_count))
 
     if workload.prompt_sizing_method is PromptSizingMethod.CHARACTERS:
         # Roughly four English characters per token; this is deliberately an estimate.
         character_count = (target if target is not None else 12) * 4
         template = " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(12)) + " "
         repetitions = (character_count + len(template) - 1) // len(template)
-        return (template * repetitions)[:character_count]
+        body = (template * repetitions)[: max(0, character_count - len(prefix))]
+        return (prefix + body)[: max(character_count, len(prefix))]
 
     if target is not None:
         raise RunSetupError(
             "tokenizer_unavailable",
             "An exact tokenizer was requested for synthetic input sizing, but none is installed.",
         )
-    return " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(12))
+    return prefix + " ".join(rng.choice(_SYNTHETIC_WORDS) for _ in range(12))
 
 
 def _finish_stop_request(connection: sqlite3.Connection, run: BenchmarkRun) -> None:
@@ -376,9 +385,16 @@ def _load_run_context(
         raise RunSetupError("model_missing", "The selected engine has no saved model reference.")
 
     if workload.input_mode is WorkloadInputMode.SYNTHETIC:
+        # Unique per call (warmups included) and per run, unless the workload opts into repeats.
+        unique_calls = None if workload.repeat_prompts else itertools.count()
 
         def prompt_for(index: int) -> str:
-            return _synthetic_prompt(workload, index)
+            marker = (
+                f"lf-{run_id.hex[:8]}-{next(unique_calls):05d}"
+                if unique_calls is not None
+                else None
+            )
+            return _synthetic_prompt(workload, index, marker=marker)
 
     else:
         dataset = (
@@ -635,6 +651,7 @@ async def _execute_request(
     cancellation_requested: asyncio.Event,
     counts: Counter[str],
     retain_content: bool,
+    quality: RequestQualityCheck | None = None,
 ) -> RequestOutcome:
     request_id = uuid4()
     wall_started = datetime.now(UTC)
@@ -702,7 +719,8 @@ async def _execute_request(
             if event.event_type in {StreamEventType.FIRST_OUTPUT, StreamEventType.OUTPUT_CHUNK}:
                 chunk = event.text or ""
                 output_characters += len(chunk)
-                if retain_content and chunk:
+                # Quality checks need the output in memory; it is persisted only when retained.
+                if (retain_content or quality is not None) and chunk:
                     output_parts.append(chunk)
                 output_event_at = time.perf_counter()
                 if chunk:
@@ -745,6 +763,7 @@ async def _execute_request(
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens,
                             "exact": usage_exact,
+                            "cached_input_tokens": event.usage.cached_input_tokens,
                         },
                         request_id=request_id,
                     )
@@ -919,6 +938,15 @@ async def _execute_request(
         )
 
     completed_offset_ms = max(0.0, (time.monotonic_ns() - run_monotonic_origin_ns) / 1_000_000)
+    quality_result = (
+        quality.evaluate(
+            output="".join(output_parts),
+            request_succeeded=outcome is RequestOutcome.SUCCEEDED,
+            completion_tokens=output_tokens,
+        )
+        if quality is not None
+        else None
+    )
     sample_repository.update(
         request_sample.model_copy(
             update={
@@ -962,6 +990,8 @@ async def _execute_request(
                     output_characters > 0 and outcome is not RequestOutcome.SUCCEEDED
                 ),
                 "output_text": "".join(output_parts) if retain_content else None,
+                "quality_outcome": quality_result.outcome if quality_result else None,
+                "quality_reasons": list(quality_result.reasons) if quality_result else [],
             }
         ),
         allow_content_retention=retain_content,
@@ -1049,6 +1079,13 @@ async def execute_run(
                 connection, run_id, data_directory
             )
             config = _adapter_config(engine)
+            quality_for = request_quality_factory(
+                connection,
+                data_directory,
+                plan,
+                workload,
+                max_tokens=workload.target_output_tokens or workload.max_output_tokens,
+            )
             validation = await asyncio.wait_for(
                 catalog.validate_config(engine.adapter_id, config), timeout=plan.timeout_seconds
             )
@@ -1065,6 +1102,14 @@ async def execute_run(
                 run_id=run_id,
                 timeout_seconds=plan.timeout_seconds,
             )
+            conditions = RunConditionsCapture(
+                connection=connection,
+                run_id=run_id,
+                engine=engine,
+                model_ref=model_ref,
+                data_directory=data_directory,
+            )
+            await conditions.capture_start()
 
             sweep_levels = (
                 workload.concurrency_levels
@@ -1085,7 +1130,7 @@ async def execute_run(
                             adapter_id=engine.adapter_id,
                             config=config,
                             model_ref=model_ref,
-                            prompt=prompt_for(index),
+                            prompt=conditions.observe_prompt(prompt_for(index), warmup_sequence),
                             parameters=workload.sampling_config
                             | {
                                 "max_tokens": workload.target_output_tokens
@@ -1257,7 +1302,7 @@ async def execute_run(
                             adapter_id=engine.adapter_id,
                             config=config,
                             model_ref=model_ref,
-                            prompt=prompt_for(index),
+                            prompt=conditions.observe_prompt(prompt_for(index), sequence + index),
                             parameters=workload.sampling_config
                             | {
                                 "max_tokens": workload.target_output_tokens
@@ -1275,6 +1320,7 @@ async def execute_run(
                             cancellation_requested=cancellation_requested,
                             counts=counts,
                             retain_content=plan.retain_prompt_output,
+                            quality=quality_for(index) if quality_for is not None else None,
                         )
 
                 await asyncio.gather(*(request_loop() for _ in range(concurrency)))
@@ -1310,6 +1356,7 @@ async def execute_run(
                     {"code": code, "message": message},
                 )
             await finish_system_sampler()
+            await conditions.capture_end()
             current = RecordRepository(connection, BenchmarkRun).get(run_id)
             if current is None:
                 return 2

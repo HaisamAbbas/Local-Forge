@@ -51,6 +51,8 @@ from localforge.core.models import (
     ModelArtifact,
     ModelArtifactStatus,
     PromptSizingMethod,
+    QualityChecks,
+    RunTargets,
     TrafficMode,
     Workload,
     WorkloadInputMode,
@@ -65,8 +67,10 @@ from localforge.dataset_storage import (
     verify_dataset_snapshot,
     write_snapshot,
 )
+from localforge.quality import ensure_quality_smoke_dataset
 from localforge.storage.database import transaction
 from localforge.storage.repositories import RecordRepository
+from localforge.targets import USE_CASES_BY_PRESET, UseCasePreset, default_targets_for
 from localforge.workspace_settings import (
     TEST_FIXTURE_BLOCKER_CODE,
     TEST_FIXTURE_BLOCKER_MESSAGE,
@@ -281,9 +285,15 @@ def create_workload(body: WorkloadCreate, connection: DatabaseConnection) -> Wor
 )
 def create_workload_preset(
     body: WorkloadPresetCreate,
+    request: Request,
     connection: DatabaseConnection,
 ) -> Workload:
     preset = body.preset
+    use_case = USE_CASES_BY_PRESET.get(preset)
+    if use_case is not None:
+        return _create_use_case_workload(
+            body, use_case, connection, cast(Path, request.app.state.data_directory)
+        )
     defaults: dict[WorkloadPreset, tuple[WorkloadKind, int, int]] = {
         WorkloadPreset.FIXED_PREFILL: (WorkloadKind.COMPLETION, 1024, 32),
         WorkloadPreset.FIXED_DECODE: (WorkloadKind.COMPLETION, 128, body.max_output_tokens),
@@ -321,8 +331,64 @@ def create_workload_preset(
         "prompt_sizing_method": PromptSizingMethod.CHARACTERS,
         "random_seed": body.random_seed,
         "sampling_config": body.sampling_config,
+        "quality_checks": body.quality_checks,
     }
     _apply_duration_only_default(values, body.model_fields_set)
+    return _create_workload(connection, values)
+
+
+def _create_use_case_workload(
+    body: WorkloadPresetCreate,
+    use_case: UseCasePreset,
+    connection: sqlite3.Connection,
+    data_directory: Path,
+) -> Workload:
+    """Build a realistic use-case workload; explicit request fields override its defaults."""
+
+    provided = body.model_fields_set
+    output_tokens = (
+        body.max_output_tokens if "max_output_tokens" in provided else use_case.output_tokens
+    )
+    if "request_count" in provided:
+        request_count = body.request_count
+    elif "duration_seconds" in provided:
+        request_count = None
+    else:
+        request_count = use_case.request_count
+    values: dict[str, object] = {
+        "name": body.name,
+        "kind": WorkloadKind.CHAT,
+        "input_mode": WorkloadInputMode.SYNTHETIC,
+        "preset": use_case.preset,
+        "request_count": request_count,
+        "duration_seconds": body.duration_seconds,
+        "concurrency": body.concurrency if "concurrency" in provided else use_case.concurrency,
+        "traffic_mode": TrafficMode.CLOSED_LOOP,
+        "arrival_rate_per_second": body.arrival_rate_per_second,
+        "warmup_count": body.warmup_count,
+        "target_input_tokens": use_case.input_tokens,
+        "target_output_tokens": output_tokens,
+        "max_output_tokens": output_tokens,
+        "prompt_sizing_method": PromptSizingMethod.CHARACTERS,
+        "random_seed": body.random_seed,
+        "sampling_config": body.sampling_config,
+        "quality_checks": body.quality_checks,
+    }
+    if use_case.preset is WorkloadPreset.QUALITY_SMOKE:
+        try:
+            dataset = ensure_quality_smoke_dataset(connection, data_directory)
+        except (OSError, ValueError) as error:
+            raise _http_error(
+                500,
+                "dataset_storage_unavailable",
+                "LOCALFORGE could not prepare the built-in quality smoke dataset.",
+            ) from error
+        values |= {
+            "input_mode": WorkloadInputMode.DATASET,
+            "dataset_id": dataset.id,
+            "target_input_tokens": None,
+            "quality_checks": body.quality_checks or QualityChecks(exact_match=True),
+        }
     return _create_workload(connection, values)
 
 
@@ -651,6 +717,11 @@ def _preflight(
             "random_seed": workload.random_seed,
             "sampling_config": workload.sampling_config,
             "retain_prompt_output": body.retain_prompt_output,
+            "quality_checks": (
+                cast(JsonValue, workload.quality_checks.model_dump(mode="json"))
+                if workload.quality_checks is not None
+                else None
+            ),
         }
         if workload.status is not WorkloadStatus.READY:
             _add_issue(blockers, "workload_not_ready", "The selected workload is not ready.")
@@ -776,6 +847,17 @@ def _preflight(
                     warnings,
                     "dataset_tokenizer_unknown",
                     "Dataset prompt token counts are unknown because its tokenizer is unavailable.",
+                )
+            if (
+                dataset is not None
+                and workload.quality_checks is not None
+                and workload.quality_checks.exact_match
+                and dataset.expected_answer_field is None
+            ):
+                _add_issue(
+                    blockers,
+                    "quality_expected_answers_missing",
+                    "Exact-match checks need a dataset imported with an expected-answer field.",
                 )
         effective_concurrency = (
             max(workload.concurrency_levels)
@@ -917,6 +999,12 @@ def create_benchmark_plan(
     configuration_snapshot, snapshot_hash = _plan_snapshot(connection, body.workload_id)
     configuration_snapshot["prompt_output_retention"] = body.retain_prompt_output
     workload = RecordRepository(connection, Workload).get(body.workload_id)
+    targets = (
+        body.targets
+        if "targets" in body.model_fields_set
+        else default_targets_for(workload.preset if workload is not None else None)
+    )
+    configuration_snapshot["targets"] = _targets_json(targets)
     plan = BenchmarkPlan(
         name=body.name,
         status=BenchmarkPlanStatus.READY if preflight.valid else BenchmarkPlanStatus.BLOCKED,
@@ -938,9 +1026,14 @@ def create_benchmark_plan(
         retain_prompt_output=body.retain_prompt_output,
         dataset_snapshot_hash=snapshot_hash,
         configuration_snapshot=cast(dict[str, JsonValue], configuration_snapshot),
+        targets=targets,
     )
     RecordRepository(connection, BenchmarkPlan).create(plan)
     return BenchmarkPlanResponse(plan=plan, preflight=preflight)
+
+
+def _targets_json(targets: RunTargets | None) -> JsonValue:
+    return cast(JsonValue, targets.model_dump(mode="json")) if targets is not None else None
 
 
 _CLONE_CHANGE_ORDER = (
@@ -1133,6 +1226,7 @@ def clone_benchmark_plan(
         )
         configuration_snapshot, snapshot_hash = _plan_snapshot(connection, workload_id)
         configuration_snapshot["prompt_output_retention"] = create_body.retain_prompt_output
+        configuration_snapshot["targets"] = _targets_json(source_plan.targets)
         workload = workload_repository.get(workload_id)
         plan = BenchmarkPlan(
             name=create_body.name,
@@ -1157,6 +1251,7 @@ def clone_benchmark_plan(
             retain_prompt_output=create_body.retain_prompt_output,
             dataset_snapshot_hash=snapshot_hash,
             configuration_snapshot=cast(dict[str, JsonValue], configuration_snapshot),
+            targets=source_plan.targets,
         )
         RecordRepository(connection, BenchmarkPlan).create(plan)
     return BenchmarkPlanCloneResponse(plan=plan, preflight=preflight, changed_fields=changed_fields)
@@ -1203,6 +1298,7 @@ def export_benchmark_plan(
             timeout_seconds=plan.timeout_seconds,
             retain_prompt_output=plan.retain_prompt_output,
             dataset_snapshot_hash=plan.dataset_snapshot_hash,
+            targets=plan.targets,
         ),
     )
     content = json.dumps(bundle.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
@@ -1276,6 +1372,7 @@ def import_benchmark_plan(
         "dataset_snapshot_hash": dataset.snapshot_hash if dataset is not None else None,
         "dataset_source_hash": dataset.content_hash if dataset is not None else None,
         "prompt_output_retention": plan_settings.retain_prompt_output,
+        "targets": _targets_json(plan_settings.targets),
     }
     imported_plan = BenchmarkPlan(
         name=plan_settings.name,
@@ -1292,6 +1389,7 @@ def import_benchmark_plan(
         retain_prompt_output=plan_settings.retain_prompt_output,
         dataset_snapshot_hash=dataset.snapshot_hash if dataset is not None else None,
         configuration_snapshot=cast(dict[str, JsonValue], configuration_snapshot),
+        targets=plan_settings.targets,
     )
     with transaction(connection):
         RecordRepository(connection, Workload).create(workload)

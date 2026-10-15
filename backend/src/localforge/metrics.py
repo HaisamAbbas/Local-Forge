@@ -19,6 +19,7 @@ from localforge.core.models import (
     TokenCountSource,
     utc_now,
 )
+from localforge.quality import quality_pass_rate_metric
 
 METRIC_METHOD_VERSION = "localforge.metrics.v1"
 PERCENTILE_MINIMUMS = {"p50": 1, "p90": 10, "p95": 20, "p99": 100}
@@ -52,6 +53,8 @@ class _RequestMetricSample:
     first_output_offset_ms: float | None
     # Engine-native per-request observations keyed by (metric name, unit).
     native_observations: Mapping[tuple[str, str], float]
+    # Opt-in output quality outcome (pass / fail / unknown); None when no checks ran.
+    quality_outcome: str | None = None
 
     @classmethod
     def from_request(
@@ -76,6 +79,7 @@ class _RequestMetricSample:
             completion_tokens=sample.completion_tokens,
             completion_token_count_source=sample.completion_token_count_source,
             first_output_offset_ms=sample.first_output_offset_ms,
+            quality_outcome=sample.quality_outcome,
         )
 
 
@@ -722,6 +726,9 @@ def _aggregate_run_metric_records(
         )
     )
     metric_rows.extend(_engine_native_request_aggregates(run_id, records))
+    metric_rows.extend(
+        quality_pass_rate_metric(run_id, (sample.quality_outcome for sample in records))
+    )
     return metric_rows
 
 

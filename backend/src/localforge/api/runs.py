@@ -211,6 +211,8 @@ def _run_profile_snapshot(
                 if model is not None
                 else None
             ),
+            # Targets in force when the run started, so later plan edits don't rewrite verdicts.
+            "targets": (plan.targets.model_dump(mode="json") if plan.targets is not None else None),
         },
     )
 

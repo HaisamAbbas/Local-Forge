@@ -840,6 +840,7 @@ def create_experiment(
             retain_prompt_output=baseline_plan.retain_prompt_output,
             dataset_snapshot_hash=snapshot_hash,
             configuration_snapshot=cast(dict[str, JsonValue], config_snapshot),
+            targets=baseline_plan.targets,
         )
         trial = ExperimentTrial(
             order=order,

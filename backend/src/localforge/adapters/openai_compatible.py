@@ -260,10 +260,19 @@ def _usage(payload: object) -> UsageCounts | None:
         output_tokens = None
     if input_tokens is None and output_tokens is None:
         return None
+    # OpenAI-style prompt_tokens_details.cached_tokens, or llama-server's timings.cache_n.
+    details = usage.get("prompt_tokens_details")
+    timings = payload.get("timings")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if cached is None and isinstance(timings, dict):
+        cached = timings.get("cache_n")
+    if isinstance(cached, bool) or not isinstance(cached, int) or cached < 0:
+        cached = None
     return UsageCounts(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         exact=input_tokens is not None and output_tokens is not None,
+        cached_input_tokens=cached,
     )
 
 

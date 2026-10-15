@@ -22,11 +22,13 @@ from localforge.core.models import (
     MetricSample,
     ModelArtifactStatus,
     PromptSizingMethod,
+    QualityChecks,
     ReportFormat,
     ReportMetadata,
     ReportStatus,
     RequestSample,
     RunEventRecord,
+    RunTargets,
     SchemaModel,
     TrafficMode,
     Workload,
@@ -171,6 +173,8 @@ class WorkloadCreate(SchemaModel):
     prompt_sizing_method: PromptSizingMethod = PromptSizingMethod.CHARACTERS
     random_seed: int = Field(default=0, ge=0, le=2**63 - 1)
     sampling_config: dict[str, JsonValue] = Field(default_factory=dict)
+    quality_checks: QualityChecks | None = None
+    repeat_prompts: bool = False
 
 
 class WorkloadPresetCreate(SchemaModel):
@@ -185,6 +189,7 @@ class WorkloadPresetCreate(SchemaModel):
     max_output_tokens: int = Field(default=256, ge=1, le=1_000_000)
     random_seed: int = Field(default=0, ge=0, le=2**63 - 1)
     sampling_config: dict[str, JsonValue] = Field(default_factory=dict)
+    quality_checks: QualityChecks | None = None
 
 
 class DatasetPreview(SchemaModel):
@@ -211,6 +216,12 @@ class BenchmarkPlanCreate(SchemaModel):
     model_artifact_id: UUID | None = None
     workload_id: UUID
     retain_prompt_output: bool = False
+    # Omitted: defaults from the workload's use-case preset. Explicit null: no targets.
+    targets: RunTargets | None = None
+
+
+class PlanTargetsUpdate(SchemaModel):
+    targets: RunTargets | None = None
 
 
 class PreflightIssue(SchemaModel):
@@ -251,6 +262,7 @@ class BenchmarkPlanSettings(SchemaModel):
     timeout_seconds: float = Field(default=120, gt=0)
     retain_prompt_output: bool = False
     dataset_snapshot_hash: str | None = None
+    targets: RunTargets | None = None
 
 
 class BenchmarkPlanExport(SchemaModel):

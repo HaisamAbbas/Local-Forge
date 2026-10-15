@@ -6,7 +6,9 @@ from localforge.api.main import AppSettings, create_app
 
 
 def test_engine_catalog_route_lists_all_registered_manifests(tmp_path) -> None:
-    with TestClient(create_app(AppSettings(data_directory=tmp_path))) as client:
+    with TestClient(
+        create_app(AppSettings(data_directory=tmp_path)), base_url="http://127.0.0.1"
+    ) as client:
         response = client.get("/api/v1/engines/catalog")
 
     assert response.status_code == 200

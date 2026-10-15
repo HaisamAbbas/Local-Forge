@@ -4,7 +4,7 @@ import math
 import re
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -382,6 +382,64 @@ class WorkloadPreset(StrEnum):
     CONCURRENCY_SWEEP = "concurrency_sweep"
     TARGET_REQUEST_RATE = "target_request_rate"
     LONG_CONTEXT = "long_context"
+    # Use-case presets: realistic request shapes that also carry default targets.
+    INTERACTIVE_CHAT = "interactive_chat"
+    CODING_ASSISTANT = "coding_assistant"
+    DOCUMENT_QA = "document_qa"
+    BATCH_SUMMARIZATION = "batch_summarization"
+    LONG_CONTEXT_STRESS = "long_context_stress"
+    QUALITY_SMOKE = "quality_smoke"
+
+
+QualityCheckText = Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class QualityChecks(SchemaModel):
+    """Opt-in per-output checks evaluated in memory by the worker (spec section 8.8)."""
+
+    exact_match: bool = False
+    valid_json: bool = False
+    json_required_keys: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
+        default_factory=list, max_length=20
+    )
+    stopped_properly: bool = False
+    max_output_characters: int | None = Field(default=None, ge=1, le=10_000_000)
+    must_contain: list[QualityCheckText] = Field(default_factory=list, max_length=20)
+    must_not_contain: list[QualityCheckText] = Field(default_factory=list, max_length=20)
+    case_sensitive: bool = False
+
+    @model_validator(mode="after")
+    def required_keys_need_json(self) -> "QualityChecks":
+        if self.json_required_keys and not self.valid_json:
+            raise ValueError("json_required_keys requires the valid_json check")
+        return self
+
+    def enabled(self) -> bool:
+        return bool(
+            self.exact_match
+            or self.valid_json
+            or self.stopped_properly
+            or self.max_output_characters is not None
+            or self.must_contain
+            or self.must_not_contain
+        )
+
+
+TargetDuration = Annotated[float, Field(gt=0, le=86_400_000, allow_inf_nan=False)]
+TargetRate = Annotated[float, Field(gt=0, le=10_000_000, allow_inf_nan=False)]
+TargetPercent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
+
+
+class RunTargets(SchemaModel):
+    """Optional pass/fail thresholds a plan's runs are judged against; None means no target."""
+
+    ttft_p50_ms_max: TargetDuration | None = None
+    ttft_p95_ms_max: TargetDuration | None = None
+    latency_p50_ms_max: TargetDuration | None = None
+    generation_tokens_per_second_min: TargetRate | None = None
+    request_throughput_min: TargetRate | None = None
+    error_rate_percent_max: TargetPercent | None = None
+    quality_pass_rate_min: TargetPercent | None = None
 
 
 class WorkloadKind(StrEnum):
@@ -425,9 +483,19 @@ class Workload(DomainModel):
     prompt_sizing_method: PromptSizingMethod = PromptSizingMethod.CHARACTERS
     random_seed: int = Field(default=0, ge=0, le=2**63 - 1)
     sampling_config: dict[str, JsonValue] = Field(default_factory=dict)
+    quality_checks: QualityChecks | None = None
+    # Synthetic prompts get a unique leading marker per request so engine prompt caches
+    # cannot reuse earlier requests; True keeps the old byte-identical repeated prompts.
+    repeat_prompts: bool = False
 
     @model_validator(mode="after")
     def dataset_mode_requires_dataset(self) -> "Workload":
+        if (
+            self.quality_checks is not None
+            and self.quality_checks.exact_match
+            and self.input_mode is not WorkloadInputMode.DATASET
+        ):
+            raise ValueError("exact-match checks need a dataset with expected answers")
         if self.input_mode == WorkloadInputMode.DATASET and self.dataset_id is None:
             raise ValueError("dataset_id is required when input_mode is dataset")
         if self.input_mode == WorkloadInputMode.SYNTHETIC and self.dataset_id is not None:
@@ -451,6 +519,12 @@ class Workload(DomainModel):
                 WorkloadPreset.CONCURRENCY_SWEEP: WorkloadKind.CHAT,
                 WorkloadPreset.TARGET_REQUEST_RATE: WorkloadKind.CHAT,
                 WorkloadPreset.LONG_CONTEXT: WorkloadKind.COMPLETION,
+                WorkloadPreset.INTERACTIVE_CHAT: WorkloadKind.CHAT,
+                WorkloadPreset.CODING_ASSISTANT: WorkloadKind.CHAT,
+                WorkloadPreset.DOCUMENT_QA: WorkloadKind.CHAT,
+                WorkloadPreset.BATCH_SUMMARIZATION: WorkloadKind.CHAT,
+                WorkloadPreset.LONG_CONTEXT_STRESS: WorkloadKind.CHAT,
+                WorkloadPreset.QUALITY_SMOKE: WorkloadKind.CHAT,
             }[self.preset]
             if self.kind is not expected_kind:
                 raise ValueError("workload kind does not match the selected preset")
@@ -600,6 +674,7 @@ class BenchmarkPlan(DomainModel):
     retain_prompt_output: bool = False
     dataset_snapshot_hash: str | None = None
     configuration_snapshot: dict[str, JsonValue] = Field(default_factory=dict)
+    targets: RunTargets | None = None
 
     @model_validator(mode="after")
     def run_limit_must_be_present(self) -> "BenchmarkPlan":
@@ -717,6 +792,11 @@ class RequestSample(DomainModel):
     content_retained: bool = False
     prompt_text: str | None = None
     output_text: str | None = None
+    # Opt-in quality outcome; only the verdict and reason codes are stored, never the output.
+    quality_outcome: Literal["pass", "fail", "unknown"] | None = None
+    quality_reasons: list[Annotated[str, Field(max_length=80)]] = Field(
+        default_factory=list, max_length=16
+    )
 
     @field_validator("started_at", "completed_at")
     @classmethod

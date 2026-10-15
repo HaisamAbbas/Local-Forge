@@ -184,6 +184,8 @@ class UsageCounts(SchemaModel):
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     exact: bool = False
+    # Prompt tokens the engine reports it served from its prefix/prompt cache, when reported.
+    cached_input_tokens: int | None = Field(default=None, ge=0)
 
 
 class AdapterStreamEvent(SchemaModel):

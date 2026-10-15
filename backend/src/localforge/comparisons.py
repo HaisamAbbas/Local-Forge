@@ -22,6 +22,12 @@ from localforge.core.models import (
     ModelArtifact,
     Workload,
 )
+from localforge.run_conditions.analysis import spread
+from localforge.run_conditions.comparability import (
+    model_weights_dimension,
+    power_state_dimension,
+    runtime_settings_dimension,
+)
 from localforge.storage.repositories import (
     MetricSampleRepository,
     RecordRepository,
@@ -204,7 +210,13 @@ def _workload_without_identity(
 ) -> dict[str, JsonValue] | None:
     if workload is None:
         return None
-    return {key: value for key, value in workload.items() if key not in _IGNORED_WORKLOAD_FIELDS}
+    return {
+        key: value
+        for key, value in workload.items()
+        if key not in _IGNORED_WORKLOAD_FIELDS
+        # Older snapshots predate this opt-in; only an explicit opt-in is a workload change.
+        and not (key == "repeat_prompts" and not value)
+    }
 
 
 def _flatten(value: JsonValue, prefix: str = "") -> dict[str, JsonValue]:
@@ -672,14 +684,22 @@ def build_run_comparison(
         else:
             runtime_values.append(None)
             runtime_incomplete.append(True)
+    engine_declared = declared_variable == "engine"
     dimension(
         "runtime",
         "Engine and runtime version",
         runtime_values,
         unknown_if_missing=True,
         major=True,
+        expected_change=engine_declared,
         incomplete_values=runtime_incomplete,
     )
+    adapter_ids = {
+        engine_snapshot.get("adapter_id")
+        for engine_snapshot in engine_values
+        if isinstance(engine_snapshot, dict)
+    }
+    engine_differs = engine_declared or len(adapter_ids) > 1
 
     workload_changes: list[dict[str, JsonValue]] = []
     base_workload = workloads[first]
@@ -800,13 +820,71 @@ def build_run_comparison(
     if not contention_equal:
         major_mismatch.append("contention")
 
+    # Run conditions. These are graded explicitly below and kept out of the generic
+    # "unknown provenance" rule, so runs captured before these existed keep their grade.
+    snapshots = [runs_by_id[run_id].profile_snapshot for run_id in compare_ids]
+    settings_dimension = runtime_settings_dimension(
+        [snapshot.get("runtime_settings") for snapshot in snapshots]
+    )
+    weights_dimension = model_weights_dimension(
+        [snapshot.get("model_identity") for snapshot in snapshots]
+    )
+    power_dimension = power_state_dimension([snapshot.get("power_state") for snapshot in snapshots])
+    if weights_dimension["state"] == "verified_identical":
+        for item in dimensions:
+            if item["key"] in {"model_artifact", "tokenizer"} and item["state"] != "match":
+                item["original_state"] = item["state"]
+                item["state"] = "match"
+                item["resolved_by"] = "model_weights"
+                item["note"] = (
+                    "Names or metadata differ, but the weights files are verified identical "
+                    "by SHA-256."
+                )
+                if item["key"] in noncomparable:
+                    noncomparable.remove(item["key"])
+                if item["key"] in unknown_critical:
+                    unknown_critical.remove(item["key"])
+    elif weights_dimension["state"] == "different" and "model_artifact" not in noncomparable:
+        noncomparable.append("model_weights")
+    settings_summary = cast(str | None, settings_dimension["summary"])
+    if settings_dimension["state"] == "mismatch":
+        major_mismatch.append("runtime_settings")
+    if power_dimension["state"] == "mismatch":
+        major_mismatch.append("power_state")
+    confounders: list[str] = []
+    if settings_summary:
+        confounders.append(
+            f"These runs also differ in {settings_summary}; the speed difference may come "
+            "from that, not the engine."
+            if engine_differs
+            else f"These runs differ in engine runtime settings: {settings_summary}; "
+            "speed differences may come from those settings."
+        )
+    if power_dimension["state"] == "mismatch":
+        power_summary = cast(str | None, power_dimension["summary"])
+        confounders.append(
+            f"The machine's power state differed ({power_summary})."
+            if power_summary
+            else "The machine's power state changed during at least one run."
+        )
+    if weights_dimension["state"] == "different":
+        confounders.append("The model weights files are different (SHA-256 differs).")
+
     changed_variable_count = len(changed_paths)
     has_major = bool(major_mismatch)
     if noncomparable:
         grade = "not_comparable"
         rationale = (
-            "Model artifact/tokenizer or workload identity differs beyond the declared variable."
+            "Model weights differ."
+            if noncomparable == ["model_weights"]
+            else "Model artifact/tokenizer or workload identity differs beyond the declared "
+            "variable."
         )
+    elif engine_differs and not engine_declared and settings_dimension["state"] == "mismatch":
+        # A different engine is already a major difference; differing runtime settings on
+        # top of it mean the result cannot be attributed to either.
+        grade = "not_comparable"
+        rationale = "Run both engines with the same settings to compare the engines themselves."
     elif changed_variable_count > 1 or (declared_variable is None and changed_variable_count > 0):
         grade = "not_comparable"
         rationale = (
@@ -829,6 +907,17 @@ def build_run_comparison(
     else:
         grade = "A"
         rationale = "The captured setup matches except for the declared variable."
+    if confounders:
+        rationale = " ".join([*confounders, rationale])
+    dimensions.extend([settings_dimension, weights_dimension, power_dimension])
+    if engine_declared:
+        declared_value = {
+            "path": "engine",
+            "values": [
+                engine_snapshot.get("adapter_id") if isinstance(engine_snapshot, dict) else None
+                for engine_snapshot in engine_values
+            ],
+        }
 
     if grade == "not_comparable":
         label = "Not comparable"
@@ -847,6 +936,7 @@ def build_run_comparison(
         "grade": grade,
         "label": label,
         "rationale": rationale,
+        "confounders": cast(JsonValue, confounders),
         "controlled_comparison_badge": causal_allowed,
         "causal_interpretation_allowed": causal_allowed,
         "dimensions": dimensions,
@@ -1067,6 +1157,7 @@ def build_experiment_summary(
                         count = observation.get("sample_count")
                         if isinstance(count, int) and not isinstance(count, bool):
                             sample_count += count
+                repeat_spread = spread(observations)
                 trial_metrics.append(
                     {
                         "metric_name": raw_metric.get("metric_name"),
@@ -1083,6 +1174,9 @@ def build_experiment_summary(
                         "spread_max": max(observations) if observations else None,
                         "repeat_count": len(observations),
                         "sample_count": sample_count,
+                        # Coefficient of variation across repeats; above 10% is unstable.
+                        "cv": repeat_spread["cv"],
+                        "unstable": repeat_spread["unstable"],
                     }
                 )
         variant_summary: dict[str, Any] = {

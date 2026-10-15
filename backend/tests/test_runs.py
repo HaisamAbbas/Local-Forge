@@ -1023,7 +1023,23 @@ def test_open_loop_late_dispatch_emits_one_load_generator_saturation_warning(tmp
 
     async def execute_after_releasing_gate() -> int:
         async def release() -> None:
-            await asyncio.sleep(0.05)
+            # Hold the first token until the first request has really been dispatched. A fixed
+            # delay is not enough: run setup (model hashing, power state) can outlast it, and
+            # then no request waits long enough to saturate the load generator.
+            deadline = asyncio.get_running_loop().time() + 60
+            while asyncio.get_running_loop().time() < deadline:
+                probe = open_database(database_path)
+                try:
+                    started = any(
+                        event.event_type == "request_started"
+                        for event in list_run_events(probe, run.id)
+                    )
+                finally:
+                    probe.close()
+                if started:
+                    break
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.1)
             first_token_gate.set()
 
         release_task = asyncio.create_task(release())
