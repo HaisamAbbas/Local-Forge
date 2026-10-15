@@ -1621,3 +1621,49 @@ export type HardwareFitResult = {
 
 export const fetchHardwareFit = (refresh = false) =>
   apiRequest<HardwareFitResult>(`/api/v1/hardware-fit${refresh ? "?refresh=true" : ""}`);
+
+// --- Launch-settings tuning for managed llama.cpp (Engines screen) ---
+export type TuneObjective = "throughput" | "latency" | "ttft";
+export type TuneTrial = {
+  settings: Record<string, unknown>;
+  changed: string | null;
+  score: number | null;
+  tokens_per_second: number | null;
+  ttft_ms: number | null;
+  latency_ms: number | null;
+  error: string | null;
+};
+export type TuneJob = {
+  id: string;
+  engine_profile_id: string;
+  engine_label: string;
+  objective: TuneObjective;
+  objective_description: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  started_at: string;
+  finished_at: string | null;
+  total_trials: number;
+  trials: TuneTrial[];
+  min_gain_percent: number;
+  baseline_score: number | null;
+  best_score: number | null;
+  improvement_percent: number | null;
+  best_settings: Record<string, unknown>;
+  recommended_launch_settings: Record<string, unknown> | null;
+  error: string | null;
+  stopping: boolean;
+};
+
+export const startTune = (engineProfileId: string, objective: TuneObjective) =>
+  apiRequest<TuneJob>("/api/v1/tunes", {
+    method: "POST",
+    body: JSON.stringify({ engine_profile_id: engineProfileId, objective }),
+  });
+export const listTunes = () => apiRequest<TuneJob[]>("/api/v1/tunes");
+export const getTune = (id: string) =>
+  apiRequest<TuneJob>(`/api/v1/tunes/${encodeURIComponent(id)}`);
+export const cancelTune = (id: string) =>
+  apiRequest<TuneJob>(`/api/v1/tunes/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: "{}",
+  });
