@@ -7894,3 +7894,15 @@ a.learning-chip:focus-visible {
   width: 100%;
   max-width: 420px;
 }
+
+.brand-mark {
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

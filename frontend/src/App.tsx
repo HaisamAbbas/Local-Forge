@@ -117,7 +117,7 @@ export function App() {
         <header className="site-navigation">
           <a className="brand" href="#overview" aria-label="LOCALFORGE Inference Lab home">
             <span className="brand-mark" aria-hidden="true">
-              LF
+              <img alt="" height="38" src="/favicon.svg" width="38" />
             </span>
             <span className="brand-name">
               LOCAL<span>FORGE</span>
