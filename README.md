@@ -1,6 +1,36 @@
 <p align="center"><img alt="LocalForge icon" height="96" src="frontend/public/icon-512.png" width="96" /></p>
 
-# LOCALFORGE Inference Lab
+<h1 align="center">LocalForge Inference Lab</h1>
+
+<p align="center">
+  <a href="https://github.com/HaisamAbbas/Local-Forge/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/HaisamAbbas/Local-Forge/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://pypi.org/project/localforge-inference-lab/"><img alt="PyPI" src="https://img.shields.io/pypi/v/localforge-inference-lab" /></a>
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue" />
+</p>
+
+Find out which open-source Large Language Models (LLMs) and inference engines your hardware runs
+best, and prove it with real numbers. LocalForge inspects your CPU, system RAM, GPU(s) and
+accelerators, grades models across popular quantizations, then benchmarks the engines you choose
+(Ollama, llama.cpp, KoboldCpp, vLLM, OpenVINO and more) on your own machine. Everything runs
+locally and stays on this computer.
+
+**New: hardware fit and launch tuning.** The **Hardware fit** tab detects your machine and rates
+every catalog model *Perfect*, *Good*, *Marginal* or *Too large* for it, with the best
+quantization, where it would run (GPU, GPU plus RAM, or CPU) and an estimated speed. Then **Tune
+launch settings** benchmarks CPU threads, GPU layers and batch size for a llama.cpp server and
+keeps a change only when it clearly helps. Comparisons now record the engine settings, model
+weights and power state of each run, so a faster result is never credited to the wrong thing.
+
+<p align="center"><img alt="The Hardware fit screen: detected hardware and a graded model list" src="docs/images/hardware-fit.jpg" width="900" /></p>
+
+```powershell
+uvx localforge-inference-lab
+```
+
+[Install and run](#install-and-run-users) · [Benchmark from a script or CI](#benchmark-from-a-script-or-ci) ·
+[Tune a llama.cpp launch](#tune-a-llamacpp-launch) · [Changelog](CHANGELOG.md)
+
+## What it is
 
 LOCALFORGE is a local-first workbench for measuring and comparing LLM inference engines. The
 dashboard and control API run on the evaluator's machine and bind to loopback during development.
