@@ -82,3 +82,53 @@ jobs:
         env:
           CI: "true"
         run: npm run e2e
+
+  # The unit tests drive fake engines. This job benchmarks a real llama-server so that problems
+  # that only appear against a real server (required settings, model ids, token counts, native
+  # metrics) fail here instead of on a user's machine. Downloads are pinned by SHA-256.
+  real-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LLAMA_CPP_BUILD: b11609
+      LLAMA_CPP_SHA256: f95cbb27dd6e377f2ce30f5cfd7ec987af3259c025fc7c98fff62927a16ff528
+      MODEL_URL: https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/09816acd5d99df7be770d85ea30822623dab342c/SmolLM2-135M-Instruct-Q4_K_M.gguf
+      MODEL_SHA256: 2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Install Python dependencies
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Download pinned llama.cpp and a 135M-parameter test model
+        run: |
+          set -euo pipefail
+          engine="$RUNNER_TEMP/engine"
+          mkdir -p "$engine"
+          curl -fsSL -o "$RUNNER_TEMP/llama.tar.gz" \
+            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_BUILD}/llama-${LLAMA_CPP_BUILD}-bin-ubuntu-x64.tar.gz"
+          echo "${LLAMA_CPP_SHA256}  $RUNNER_TEMP/llama.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/llama.tar.gz" -C "$engine"
+          curl -fsSL -o "$RUNNER_TEMP/model.gguf" "$MODEL_URL"
+          echo "${MODEL_SHA256}  $RUNNER_TEMP/model.gguf" | sha256sum -c -
+          server="$(find "$engine" -name llama-server -type f | head -n 1)"
+          test -n "$server"
+          chmod +x "$server"
+          echo "LLAMA_SERVER=$server" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$server")" >> "$GITHUB_ENV"
+
+      - name: Benchmark a real llama-server through LocalForge
+        working-directory: backend
+        run: >
+          uv run --locked python ../scripts/ci/real_engine_smoke.py
+          --llama-server "$LLAMA_SERVER" --model "$RUNNER_TEMP/model.gguf"
