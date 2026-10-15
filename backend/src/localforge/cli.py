@@ -57,7 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.epilog = (
         "Run `localforge recommend` to rank inference engines for this machine "
         "(add --json for machine-readable output), or `localforge bench plan.json` to run a "
-        "benchmark from a file without the browser (for scripts and CI)."
+        "benchmark from a file without the browser (for scripts and CI), or "
+        "`localforge tune plan.json` to find the best launch settings for a managed llama.cpp."
     )
     return parser
 
@@ -216,6 +217,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["recommend"]:
         return recommend_main(arguments[1:])
+    if arguments[:1] == ["tune"]:
+        from localforge.tune import tune_main
+
+        return tune_main(arguments[1:])
     if arguments[:1] == ["bench"]:
         from localforge.headless import bench_main
 
