@@ -40,6 +40,33 @@ from localforge.core.urls import is_loopback_host, parse_engine_endpoint
 
 OLLAMA_ADAPTER_ID = "localforge.ollama"
 OLLAMA_ADAPTER_VERSION = "1.0.0"
+
+# Ollama cuts prompts to its context window without an error (2048 tokens by default in older
+# releases, 4096 in newer ones), so an 8k-token benchmark prompt silently measures 2k tokens.
+OLLAMA_SAFE_DEFAULT_CONTEXT_TOKENS = 2048
+OLLAMA_MAX_REQUESTED_CONTEXT_TOKENS = 131_072
+# Deliberately low, so the estimate errs towards a larger window than strictly needed.
+ESTIMATED_CHARACTERS_PER_TOKEN = 3
+CONTEXT_MARGIN_TOKENS = 64
+
+
+def required_context_tokens(prompt: str, max_output_tokens: int | None) -> int | None:
+    """The ``num_ctx`` this request needs, or None when Ollama's default window is enough.
+
+    Sizes step through powers of two (4096, 8192, ...) rather than tracking each prompt, so a run
+    whose prompts differ a little does not make Ollama reload the model between requests.
+    """
+
+    needed = len(prompt) // ESTIMATED_CHARACTERS_PER_TOKEN + (max_output_tokens or 0)
+    needed += CONTEXT_MARGIN_TOKENS
+    if needed <= OLLAMA_SAFE_DEFAULT_CONTEXT_TOKENS:
+        return None
+    size = 4096
+    while size < needed and size < OLLAMA_MAX_REQUESTED_CONTEXT_TOKENS:
+        size *= 2
+    return size
+
+
 _EXTENSION_NAMESPACE = "ollama"
 _EXTENSION_KEYS = {"timeout_seconds", "streaming_mode"}
 _REQUEST_PARAMETERS = {
@@ -899,12 +926,18 @@ class OllamaEngineAdapter:
         mode = _extension(config).get("streaming_mode", "auto")
         stream = mode != "disabled"
         options: dict[str, JsonValue] = {}
-        for key in ("temperature", "top_p", "top_k", "seed"):
+        for key in ("temperature", "top_p", "top_k", "seed", "num_ctx"):
             if key in parameters:
                 options[key] = parameters[key]
         max_tokens = parameters.get("max_tokens")
         if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
             options["num_predict"] = max_tokens
+        if "num_ctx" not in options:
+            needed = required_context_tokens(
+                request.prompt, max_tokens if isinstance(max_tokens, int) else None
+            )
+            if needed is not None:
+                options["num_ctx"] = needed
         stops: list[JsonValue] = []
         for key in ("stop", "stop_sequences"):
             stop = parameters.get(key)

@@ -488,3 +488,31 @@ def test_runner_provenance_is_persisted_only_as_unknown(tmp_path) -> None:
         }
     finally:
         connection.close()
+
+
+def test_ollama_requests_ask_for_a_context_large_enough_for_the_prompt() -> None:
+    from localforge.adapters.contracts import AdapterConfiguration, PreparedRequest
+    from localforge.adapters.ollama import OllamaEngineAdapter, required_context_tokens
+    from localforge.core.models import EngineIntegrationMode
+
+    config = AdapterConfiguration(
+        integration_mode=EngineIntegrationMode.ATTACHED_ENDPOINT,
+        values={"endpoint_url": "http://127.0.0.1:11434"},
+    )
+
+    def options_for(prompt: str, **parameters: object) -> dict[str, Any]:
+        request = PreparedRequest(model_ref="m", prompt=prompt, transport="ollama")
+        payload = OllamaEngineAdapter._chat_payload(
+            request, {"max_tokens": 128, **parameters}, config
+        )
+        return payload.get("options", {})  # type: ignore[no-any-return]
+
+    # Short prompts keep Ollama's default window; a ~8k-token prompt gets 16384 so it is not cut.
+    assert "num_ctx" not in options_for("hello " * 50)
+    assert options_for("word " * 6_600)["num_ctx"] == 16_384
+    # An explicit value wins, and sizes step by powers of two so the model is not reloaded.
+    assert options_for("word " * 6_600, num_ctx=32_768)["num_ctx"] == 32_768
+    assert required_context_tokens("x" * 7_000, 128) == 4_096
+    assert required_context_tokens("x" * 7_800, 128) == 4_096
+    assert required_context_tokens("x" * 12_000, 128) == 8_192
+    assert required_context_tokens("x" * 10_000_000, 128) == 131_072

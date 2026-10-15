@@ -15,8 +15,9 @@ delete models. The local API default is `http://127.0.0.1:11434`.
 
 Only model entries without remote-host metadata are exposed as locally runnable. Request preparation
 rechecks the inventory and blocks an ID that is missing or remote-backed. If inventory cannot be
-verified, the run is blocked and the probe reports that condition. The UI says that the model must
-already be installed; there is no pull or delete control in LOCALFORGE.
+verified, the run is blocked and the probe reports that condition. The adapter never pulls or
+deletes models. Separately, the **Models** screen can ask a local, enabled Ollama profile to pull a
+catalog model after the user confirms it; see [the model catalog guide](model-catalog.md).
 
 ## Request and measurements
 
