@@ -5092,6 +5092,11 @@ table td {
   background-position: center 42%;
 }
 
+.page-heading--fit {
+  background-image: url("/images/localforge-fit-hero.jpg");
+  background-position: center 40%;
+}
+
 /* Models and Reports reuse related artwork until dedicated images exist. */
 .page-heading--models {
   background-image: url("/images/localforge-system-hero.jpg");
