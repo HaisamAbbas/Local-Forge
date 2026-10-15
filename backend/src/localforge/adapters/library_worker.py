@@ -75,7 +75,13 @@ def _initialize(
     model_path = Path(path)
     if not model_path.is_absolute() or not model_path.exists():
         raise ValueError("model path unavailable")
-    model_format = model_path.suffix.casefold().lstrip(".") or "model_directory"
+    # Folder names such as "qwen2.5-1.5b-..." contain dots, so only files have a suffix format.
+    if model_path.is_dir():
+        model_format = (
+            "openvino_ir" if (model_path / "openvino_model.xml").is_file() else "model_directory"
+        )
+    else:
+        model_format = model_path.suffix.casefold().lstrip(".") or "model_file"
     if backend == "openvino_genai":
         openvino_genai = importlib.import_module("openvino_genai")
 
@@ -225,7 +231,22 @@ def run(backend: str) -> int:
         _send(output, {"type": "complete"})
 
 
+def _drop_own_directory_from_path() -> None:
+    """Stop this script's folder from shadowing the libraries it loads.
+
+    Run as a script, Python puts this file's folder first on sys.path. That folder holds
+    LocalForge's adapter modules named ``openvino_genai.py`` and ``onnxruntime_genai.py``, so
+    importing the real runtime packages would load those adapter files instead.
+    """
+
+    own_directory = Path(__file__).resolve().parent
+    sys.path[:] = [
+        entry for entry in sys.path if not entry or Path(entry).resolve() != own_directory
+    ]
+
+
 def main() -> None:
+    _drop_own_directory_from_path()
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=("openvino_genai", "onnxruntime_genai"), required=True)
     args = parser.parse_args()

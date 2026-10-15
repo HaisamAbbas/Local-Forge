@@ -281,6 +281,8 @@ def test_library_dependency_failure_is_reported_as_failed_probe(
         assert result.status.value == "failed"
         assert result.diagnostics[0].code == "library_worker_unavailable"
         assert str(model_path) not in result.diagnostics[0].message
+        # The worker's reason reaches the user instead of a generic checklist.
+        assert "cannot import the runtime package" in result.diagnostics[0].message
         await adapter.close()
 
     asyncio.run(run())
@@ -298,6 +300,8 @@ def test_successful_library_probe_closes_its_temporary_model_worker(
         result = await adapter.probe(_config(model_path))
         assert result.status.value == "succeeded"
         assert result.engine_version == "1.2.3"
+        # Plans pick models from the probe's inventory, so the configured model must be there.
+        assert [model.model_ref for model in result.models] == ["localforge-configured:model"]
         assert not adapter._sessions
         assert counter_path.read_text(encoding="utf-8") == "1"
         await adapter.close()

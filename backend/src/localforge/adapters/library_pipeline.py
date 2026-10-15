@@ -307,14 +307,18 @@ class IsolatedLibraryPipelineAdapter:
             # if a benchmark prepared that worker while the probe was finishing.
             session = await self._start_worker(config, startup_timeout, key=f"probe:{uuid4().hex}")
             info = dict(session.info)
-        except Exception:
+        except Exception as error:
+            reason = _WORKER_FAILURE_REASONS.get(
+                error.code if isinstance(error, LibraryPipelineError) else "",
+                "Check that the library dependency is installed and the model/device "
+                "combination is supported.",
+            )
             return self._probe_failure(
                 [
                     _diagnostic(
                         "library_worker_unavailable",
                         f"The isolated {self.display_name} worker could not load the local model. "
-                        "Check that the library dependency is installed and the model/device "
-                        "combination is supported.",
+                        + reason,
                         DiagnosticSeverity.ERROR,
                         retryable=True,
                     )
@@ -334,6 +338,8 @@ class IsolatedLibraryPipelineAdapter:
             status=ProbeStatus.SUCCEEDED,
             reachable=capability(CapabilitySupport.SUPPORTED, source="local_process"),
             engine_version=version,
+            # The verified configured model is the inventory benchmark plans select from.
+            models=await self.list_models(config),
             capabilities=AdapterCapabilities(
                 adapter_id=self.adapter_id,
                 adapter_version=self.adapter_version,
@@ -833,6 +839,22 @@ def _valid_ready_message(message: dict[str, object]) -> bool:
 def _safe_info_string(message: dict[str, object], key: str) -> str | None:
     value = message.get(key)
     return value if isinstance(value, str) and value != "unknown" and len(value) <= 120 else None
+
+
+_WORKER_FAILURE_REASONS = {
+    "library_dependency_missing": (
+        "The selected Python cannot import the runtime package; install it into that Python "
+        "environment."
+    ),
+    "model_load_failed": (
+        "The runtime could not load the model; check the path points to a model in this "
+        "runtime's format."
+    ),
+    "device_unavailable": (
+        "The selected device is not available to this runtime; try CPU, or check its drivers."
+    ),
+    "ipc_validation_failed": "The worker rejected its start message; this is a LocalForge bug.",
+}
 
 
 def _safe_error_code(value: object) -> str:
