@@ -23,6 +23,7 @@ from localforge import __version__
 from localforge.adapters.catalog import AdapterCatalog, default_adapter_catalog
 from localforge.adapters.contracts import AdapterManifest, AdapterProcessHandle
 from localforge.api.experiments import router as experiment_router
+from localforge.api.hardware_fit import router as hardware_fit_router
 from localforge.api.model_suggestions import router as model_suggestion_router
 from localforge.api.playground import router as playground_router
 from localforge.api.profiles import router as profile_router
@@ -438,6 +439,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     # Before the profile router so "/engines/recommendations" is not read as a profile id.
     application.include_router(recommendation_router)
     application.include_router(model_suggestion_router)
+    application.include_router(hardware_fit_router)
     application.include_router(profile_router)
     application.include_router(playground_router)
     application.include_router(workload_router)

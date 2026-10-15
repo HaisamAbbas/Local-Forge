@@ -223,9 +223,14 @@ class CatalogModel(_Strict):
         return self.q4_size_gb * 1e9 / GIB
 
     @property
+    def read_share(self) -> float:
+        """Share of the weights read per token (below 1 for mixture-of-experts models)."""
+
+        return (self.active_params_b / self.params_b) if self.active_params_b else 1.0
+
+    @property
     def gib_read_per_token(self) -> float:
-        share = (self.active_params_b / self.params_b) if self.active_params_b else 1.0
-        return self.size_gib * share
+        return self.size_gib * self.read_share
 
     @property
     def download_size_gb(self) -> float:
