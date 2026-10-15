@@ -301,7 +301,12 @@ def detect_cpu_features(
         return CpuFeatures()  # AVX does not apply to ARM CPUs such as Apple silicon.
     if system == "win32":
         try:
-            kernel32 = ctypes.WinDLL("kernel32")
+            # WinDLL exists only on Windows; looking it up by name keeps type checking on
+            # other platforms (where this branch never runs) quiet.
+            load_windows_library = getattr(ctypes, "WinDLL", None)
+            if load_windows_library is None:
+                return CpuFeatures()
+            kernel32 = load_windows_library("kernel32")
             present = kernel32.IsProcessorFeaturePresent
             return CpuFeatures(
                 avx2=bool(present(PF_AVX2_INSTRUCTIONS_AVAILABLE)),
