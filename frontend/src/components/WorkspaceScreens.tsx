@@ -49,6 +49,7 @@ import {
   useEngineDiscovery,
   type CandidateAddState,
 } from "../lib/engine-discovery";
+import { EngineTuner } from "./EngineTuner";
 import { EngineDiscoveryPanel, EngineSetupChecklist } from "./EngineOnboarding";
 import { EngineRecommendations } from "./EngineRecommendations";
 import { recommendationProfileLabel, type AddOutcome } from "../lib/engine-recommendations";
@@ -3102,6 +3103,9 @@ export function EnginesScreen() {
                           onProbe={() => void probe(profile.id)}
                           onEnable={() => void enable(profile.id)}
                         />
+                        {managed && profile.adapter_id === "localforge.llama_cpp" && (
+                          <EngineTuner profile={profile} onApplied={() => void profiles.reload()} />
+                        )}
                         {problem && (
                           <p className="inline-warning engine-probe-problem" role="alert">
                             <strong>Probe problem:</strong> {problem} This engine stays disabled

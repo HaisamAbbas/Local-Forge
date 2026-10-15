@@ -7847,3 +7847,50 @@ a.learning-chip:focus-visible {
   border-style: dashed;
   color: var(--color-text-muted);
 }
+
+.engine-tuner {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.engine-tuner h4 {
+  margin: 0;
+}
+
+.engine-tuner .helper-copy {
+  margin: 0;
+}
+
+.engine-tuner__start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.engine-tuner__start label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.engine-tuner__progress,
+.engine-tuner__result {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
+.engine-tuner__progress p,
+.engine-tuner__result p {
+  margin: 0;
+}
+
+.engine-tuner progress {
+  width: 100%;
+  max-width: 420px;
+}
