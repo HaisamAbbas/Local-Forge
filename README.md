@@ -1,3 +1,5 @@
+<p align="center"><img alt="LocalForge icon" height="96" src="frontend/public/icon-512.png" width="96" /></p>
+
 # LOCALFORGE Inference Lab
 
 LOCALFORGE is a local-first workbench for measuring and comparing LLM inference engines. The
