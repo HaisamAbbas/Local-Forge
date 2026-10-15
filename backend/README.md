@@ -27,6 +27,18 @@ and power state of each run, so a faster result is never credited to the wrong t
 Everything stays local. The app listens only on `127.0.0.1`, keeps its data in a local SQLite
 database, and downloads a model only when you confirm it.
 
+## A tour of the app
+
+<p align="center"><img alt="Engines: ranked engine recommendations for this machine, with measured speeds from your own runs." src="https://raw.githubusercontent.com/HaisamAbbas/Local-Forge/main/docs/images/engines.jpg" width="900" /><br /><sub>Engines: ranked engine recommendations for this machine, with measured speeds from your own runs.</sub></p>
+
+<p align="center"><img alt="Models: models suggested for this machine, with one-click pull through Ollama after you confirm." src="https://raw.githubusercontent.com/HaisamAbbas/Local-Forge/main/docs/images/models.jpg" width="900" /><br /><sub>Models: models suggested for this machine, with one-click pull through Ollama after you confirm.</sub></p>
+
+<p align="center"><img alt="Runs: a finished run with time to first token, latency, generation speed and per-request charts." src="https://raw.githubusercontent.com/HaisamAbbas/Local-Forge/main/docs/images/run-detail.jpg" width="900" /><br /><sub>Runs: a finished run with time to first token, latency, generation speed and per-request charts.</sub></p>
+
+<p align="center"><img alt="Experiments: a comparison that says when two runs are not comparable, and why, instead of crowning a winner." src="https://raw.githubusercontent.com/HaisamAbbas/Local-Forge/main/docs/images/comparison.jpg" width="900" /><br /><sub>Experiments: a comparison that says when two runs are not comparable, and why, instead of crowning a winner.</sub></p>
+
+<p align="center"><img alt="Learning: a glossary of every metric with its formula, plus experiment guides." src="https://raw.githubusercontent.com/HaisamAbbas/Local-Forge/main/docs/images/learning.jpg" width="900" /><br /><sub>Learning: a glossary of every metric with its formula, plus experiment guides.</sub></p>
+
 ## Install and run
 
 You need [uv](https://docs.astral.sh/uv/) and an inference engine with a model, for example

@@ -30,6 +30,18 @@ uvx localforge-inference-lab
 [Install and run](#install-and-run-users) · [Benchmark from a script or CI](#benchmark-from-a-script-or-ci) ·
 [Tune a llama.cpp launch](#tune-a-llamacpp-launch) · [Changelog](CHANGELOG.md)
 
+## A tour of the app
+
+<p align="center"><img alt="Engines: ranked engine recommendations for this machine, with measured speeds from your own runs." src="docs/images/engines.jpg" width="900" /><br /><sub>Engines: ranked engine recommendations for this machine, with measured speeds from your own runs.</sub></p>
+
+<p align="center"><img alt="Models: models suggested for this machine, with one-click pull through Ollama after you confirm." src="docs/images/models.jpg" width="900" /><br /><sub>Models: models suggested for this machine, with one-click pull through Ollama after you confirm.</sub></p>
+
+<p align="center"><img alt="Runs: a finished run with time to first token, latency, generation speed and per-request charts." src="docs/images/run-detail.jpg" width="900" /><br /><sub>Runs: a finished run with time to first token, latency, generation speed and per-request charts.</sub></p>
+
+<p align="center"><img alt="Experiments: a comparison that says when two runs are not comparable, and why, instead of crowning a winner." src="docs/images/comparison.jpg" width="900" /><br /><sub>Experiments: a comparison that says when two runs are not comparable, and why, instead of crowning a winner.</sub></p>
+
+<p align="center"><img alt="Learning: a glossary of every metric with its formula, plus experiment guides." src="docs/images/learning.jpg" width="900" /><br /><sub>Learning: a glossary of every metric with its formula, plus experiment guides.</sub></p>
+
 ## What it is
 
 LOCALFORGE is a local-first workbench for measuring and comparing LLM inference engines. The
