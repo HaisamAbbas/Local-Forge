@@ -38,6 +38,8 @@ import { groupWarnings } from "../lib/run-measurements";
 import { RepeatWithChangePanel, RunCleanupControl } from "./RunActions";
 import { RunRequestCharts } from "./RunCharts";
 import { RunKeyResults, RunMeasurements } from "./RunMeasurements";
+import { RunConditionsCard } from "./RunConditions";
+import { RunVerdict } from "./RunVerdict";
 import { RequestPointChart } from "./charts/RequestPointChart";
 
 const EVENT_TYPES = [
@@ -952,6 +954,8 @@ export function RunsScreen({
               </div>
             )}
 
+            <RunVerdict runId={selectedRun.id} runStatus={selectedRun.status} />
+
             <RunKeyResults
               metrics={detail.metrics}
               counts={counts}
@@ -990,6 +994,8 @@ export function RunsScreen({
                 telemetryEvent={detail.systemSample ?? undefined}
               />
             </section>
+
+            <RunConditionsCard run={selectedRun} />
 
             <section className="run-subsection" aria-labelledby="run-provenance-title">
               <div className="section-title-row">

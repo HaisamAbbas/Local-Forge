@@ -779,7 +779,10 @@ export async function streamPlaygroundPrompt(
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     if (error instanceof ApiError) throw error;
-    throw new ApiError("The local API could not be reached. Check that it is running, then retry.", 0);
+    throw new ApiError(
+      "The local API could not be reached. Check that it is running, then retry.",
+      0,
+    );
   }
 
   if (!response.ok) {
@@ -817,7 +820,11 @@ export async function streamPlaygroundPrompt(
     } catch {
       throw new ApiError("The engine returned an invalid stream event.", 502);
     }
-    if (typeof value !== "object" || value === null || typeof (value as { type?: unknown }).type !== "string")
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      typeof (value as { type?: unknown }).type !== "string"
+    )
       throw new ApiError("The engine returned an invalid stream event.", 502);
     const event = value as PlaygroundStreamEvent;
     if (event.type === "error") throw new ApiError(event.message, 502, event.code);
@@ -1214,3 +1221,338 @@ export type EngineRecommendationsResult = {
 /** Rescans engines running on this computer (127.0.0.1) and ranks engines for it. */
 export const fetchEngineRecommendations = () =>
   apiRequest<EngineRecommendationsResult>("/api/v1/engines/recommendations");
+
+/* ---- Use-case presets, run targets, verdicts, and quality checks ---- */
+
+/** Optional pass/fail thresholds saved on a plan; null means "no target". */
+export type RunTargets = {
+  ttft_p50_ms_max: number | null;
+  ttft_p95_ms_max: number | null;
+  latency_p50_ms_max: number | null;
+  generation_tokens_per_second_min: number | null;
+  request_throughput_min: number | null;
+  error_rate_percent_max: number | null;
+  quality_pass_rate_min: number | null;
+};
+
+/** Opt-in per-output checks; outputs are checked in memory and only outcomes are stored. */
+export type QualityChecks = {
+  exact_match: boolean;
+  valid_json: boolean;
+  json_required_keys: string[];
+  stopped_properly: boolean;
+  max_output_characters: number | null;
+  must_contain: string[];
+  must_not_contain: string[];
+  case_sensitive: boolean;
+};
+
+export type UseCasePreset = {
+  preset: string;
+  title: string;
+  description: string;
+  input_tokens: number | null;
+  output_tokens: number;
+  concurrency: number;
+  request_count: number;
+  focus: "latency" | "throughput" | "quality" | string;
+  default_targets: RunTargets;
+  uses_builtin_dataset: boolean;
+};
+
+export type TargetEvaluation = {
+  target: keyof RunTargets | string;
+  label: string;
+  comparison: "at_most" | "at_least";
+  threshold: number;
+  unit: string;
+  observed: number | null;
+  sample_count: number;
+  status: "pass" | "fail" | "unknown";
+  explanation: string;
+};
+
+export type RunVerdict = {
+  run_id: string;
+  plan_id: string;
+  run_status: string;
+  overall: "meets_targets" | "misses_targets" | "not_enough_data" | "no_targets";
+  headline: string;
+  summary: string;
+  targets: RunTargets | null;
+  target_source: "run_plan_snapshot" | "plan" | "none";
+  evaluations: TargetEvaluation[];
+  passed: number;
+  failed: number;
+  unknown: number;
+  concurrency_level: string | null;
+  method_version: string;
+  quality_method_version: string | null;
+};
+
+export type PrefillEstimate = {
+  available: boolean;
+  input_tokens: number;
+  prompt_tokens_per_second: number | null;
+  expected_first_token_seconds: number | null;
+  run_count: number;
+  request_count: number;
+  source_metric: string | null;
+  message: string;
+};
+
+export type UseCaseWorkloadInput = {
+  name: string;
+  preset: string;
+  request_count?: number | null;
+  duration_seconds?: number | null;
+  concurrency?: number;
+  warmup_count?: number;
+  max_output_tokens?: number;
+  random_seed?: number;
+  sampling_config?: Record<string, string | number | boolean | null>;
+  quality_checks?: QualityChecks | null;
+};
+
+export const listUseCasePresets = () =>
+  apiRequest<UseCasePreset[]>("/api/v1/workload-presets/use-cases");
+
+/** Creates a use-case workload server-side (Quality smoke also prepares its built-in dataset). */
+export const createUseCaseWorkload = (input: UseCaseWorkloadInput) =>
+  apiRequest<Workload>("/api/v1/workloads/presets", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const updatePlanTargets = (planId: string, targets: RunTargets | null) =>
+  apiRequest<BenchmarkPlan>(`/api/v1/benchmark-plans/${encodeURIComponent(planId)}/targets`, {
+    method: "PUT",
+    body: JSON.stringify({ targets }),
+  });
+
+export const fetchRunVerdict = (runId: string) =>
+  apiRequest<RunVerdict>(`/api/v1/runs/${encodeURIComponent(runId)}/verdict`);
+
+export const fetchPrefillEstimate = (params: {
+  engineProfileId: string;
+  modelArtifactId?: string | null;
+  inputTokens: number;
+}) => {
+  const query = new URLSearchParams({
+    engine_profile_id: params.engineProfileId,
+    input_tokens: String(params.inputTokens),
+  });
+  if (params.modelArtifactId) query.set("model_artifact_id", params.modelArtifactId);
+  return apiRequest<PrefillEstimate>(`/api/v1/prefill-estimate?${query.toString()}`);
+};
+
+// --- Run conditions: engine runtime settings, model weights, power state, prompt cache ---
+
+export type RuntimeSettingField = {
+  value: unknown;
+  source: string | null;
+  status?: "not_reported";
+  observed?: "after_run";
+};
+
+export type RuntimeSettingsSnapshot = {
+  schema_version: number;
+  adapter_id: string;
+  captured_at?: string;
+  status?: "unavailable";
+  fields: Record<string, RuntimeSettingField>;
+  sources?: string[];
+  notes?: string[];
+  filled_after_run?: string[];
+  process?: { executable: string };
+};
+
+export type ModelIdentity = {
+  sha256: string | null;
+  basis: "ollama_digest" | "file_hash" | "unknown";
+  size_bytes: number | null;
+  file_name: string | null;
+  note?: string | null;
+  source?: string;
+  quantization_level?: string;
+  parameter_size?: string;
+};
+
+export type PowerReading = {
+  platform: string;
+  captured_at: string;
+  ac_power: boolean | null;
+  battery_percent: number | null;
+  battery_present: boolean | null;
+  battery_saver: boolean | null;
+  power_plan: string | null;
+  power_mode: string | null;
+  platform_profile: string | null;
+  cpu_governor: string | null;
+  low_power_mode: boolean | null;
+  sources: string[];
+};
+
+export type PowerStateSnapshot = {
+  start: PowerReading;
+  end: PowerReading | null;
+  changed_during_run: boolean | null;
+  changed_fields: string[];
+};
+
+export type PromptCacheCheck = {
+  code: "prompt_cache_likely" | null;
+  affected_requests: number;
+  message?: string;
+  median_ttft_ms?: number | null;
+  reasons?: string[];
+  checked?: boolean;
+};
+
+export type RunConditionsSnapshot = {
+  runtime_settings?: RuntimeSettingsSnapshot;
+  model_identity?: ModelIdentity;
+  power_state?: PowerStateSnapshot;
+  prompt_cache?: PromptCacheCheck;
+};
+
+export type ConditionDifference = { field: string; label: string; values: unknown[] };
+
+/** Extra fields carried by the run-condition dimensions of a RunComparison. */
+export type ConditionDimension = RunComparison["dimensions"][number] & {
+  differing_fields?: ConditionDifference[];
+  unknown_fields?: string[];
+  matched_fields?: string[];
+  changed_during_run?: number[];
+  digests?: Array<string | null>;
+  summary?: string | null;
+  resolved_by?: string;
+  note?: string;
+};
+
+export type RunComparisonWithConditions = RunComparison & { confounders?: string[] };
+
+export type RepeatSpreadMetric = ExperimentSummary["variants"][number]["metrics"][number] & {
+  cv?: number | null;
+  unstable?: boolean | null;
+};
+
+/** Creates a draft experiment group that runs one saved plan `count` times (2–10). */
+export const repeatBenchmarkPlan = (planId: string, count: number) =>
+  apiRequest<ExperimentCreateResponse>(
+    `/api/v1/benchmark-plans/${encodeURIComponent(planId)}/repeat`,
+    { method: "POST", body: JSON.stringify({ count }) },
+  );
+
+// --- Model suggestions and Ollama pulls (Models screen) ---
+// Suggestions rank a curated catalog by memory fit and estimated speed; they are not benchmarks.
+export type ModelUseCase = "chat" | "coding" | "document_qa" | "small_fast" | "reasoning";
+export type ModelFit = "fits" | "tight" | "too_large";
+export type ModelSpeedBasis = "measured" | "gpu_bandwidth_rough" | "unknown";
+export type ModelDownloadedLocation = {
+  source: "ollama" | "gguf";
+  model_ref: string;
+  engine_profile_id: string | null;
+  engine_label: string | null;
+  adapter_id: string;
+};
+export type ModelSuggestion = {
+  rank: number;
+  model_id: string;
+  name: string;
+  family: string;
+  publisher: string;
+  params_b: number;
+  active_params_b: number | null;
+  q4_size_gb: number;
+  download_size_gb: number;
+  context_tokens: number;
+  license: string;
+  strengths: string[];
+  notes: string | null;
+  fit: ModelFit;
+  memory_required_gb: number;
+  speed: {
+    tokens_per_second: number | null;
+    basis: ModelSpeedBasis;
+    label: string;
+    verdict: string | null;
+  };
+  score: number;
+  reasons: string[];
+  cautions: string[];
+  downloaded: ModelDownloadedLocation[];
+  runnable_with: string[];
+  sources: {
+    ollama_tag: string | null;
+    gguf_repo: string | null;
+    gguf_file: string | null;
+    gguf_url: string | null;
+    openvino_repo: string | null;
+    onnx_repo: string | null;
+  };
+};
+export type ModelPullTarget = {
+  engine_profile_id: string;
+  label: string;
+  endpoint_url: string | null;
+  enabled: boolean;
+};
+export type ModelSuggestionsResult = {
+  generated_at: string;
+  use_case: ModelUseCase;
+  use_case_label: string;
+  use_cases: ModelUseCase[];
+  target_tokens_per_second: number;
+  catalog_version: string;
+  catalog_date: string;
+  method: string;
+  machine_summary: string;
+  memory_basis: "gpu_memory" | "system_memory";
+  memory_budget_bytes: number | null;
+  speed_basis: ModelSpeedBasis;
+  read_gib_per_second: number | null;
+  ollama_reachable: boolean;
+  pull_targets: ModelPullTarget[];
+  suggestions: ModelSuggestion[];
+};
+export type ModelPull = {
+  id: string;
+  engine_profile_id: string;
+  engine_label: string;
+  ollama_tag: string;
+  catalog_model_id: string | null;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  phase: string | null;
+  bytes_completed: number | null;
+  bytes_total: number | null;
+  percent: number | null;
+  error: string | null;
+  probe_status: "not_started" | "running" | "succeeded" | "failed";
+  probe_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export const fetchModelSuggestions = (useCase: ModelUseCase) =>
+  apiRequest<ModelSuggestionsResult>(
+    `/api/v1/models/suggestions?use_case=${encodeURIComponent(useCase)}`,
+  );
+/** Asks a local, enabled Ollama profile to download a model; only after the user confirmed. */
+export const pullModelWithOllama = (engineProfileId: string, ollamaTag: string) =>
+  apiRequest<ModelPull>("/api/v1/models/pull", {
+    method: "POST",
+    body: JSON.stringify({
+      engine_profile_id: engineProfileId,
+      ollama_tag: ollamaTag,
+      confirm: true,
+    }),
+  });
+export const listModelPulls = () => apiRequest<ModelPull[]>("/api/v1/models/pulls");
+export const getModelPull = (id: string) =>
+  apiRequest<ModelPull>(`/api/v1/models/pulls/${encodeURIComponent(id)}`);
+export const cancelModelPull = (id: string) =>
+  apiRequest<ModelPull>(`/api/v1/models/pulls/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    body: "{}",
+  });

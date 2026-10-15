@@ -19,6 +19,8 @@ import {
 } from "../lib/api";
 import { fixtureFilter } from "../lib/test-fixtures";
 import { ExperimentVariantCharts, RunComparisonCharts, RunParetoChart } from "./ComparisonCharts";
+import { RunVerdictBadge } from "./RunVerdict";
+import { ComparisonConditions, SpreadBadge } from "./RunConditions";
 import type {
   BenchmarkPlan,
   BenchmarkRun,
@@ -574,6 +576,7 @@ export function ExperimentsScreen() {
               Values show observed differences for these selected runs. LOCALFORGE does not claim a
               cause when the captured setup changed in more than one way.
             </p>
+            <ComparisonConditions comparison={comparison} />
             <div className="comparison-dimensions">
               {comparison.dimensions.map((dimension) => (
                 <details
@@ -613,6 +616,7 @@ export function ExperimentsScreen() {
                           {runLabel(id) !== `Run ${shortRun(id)}` && (
                             <small className="table-subtext">Run {shortRun(id)}</small>
                           )}
+                          <RunVerdictBadge runId={id} />
                         </th>
                       ))}
                     </tr>
@@ -719,6 +723,7 @@ export function ExperimentsScreen() {
                                   n={summary?.repeat_count ?? 0} repeats ·{" "}
                                   {summary?.sample_count ?? 0} samples
                                 </small>
+                                <SpreadBadge metric={summary} />
                               </td>
                             );
                           })}

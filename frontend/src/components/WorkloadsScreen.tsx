@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormE
 import {
   ApiError,
   createBenchmarkPlan,
+  createUseCaseWorkload,
   createWorkload,
   enableEngineProfile,
+  fetchPrefillEstimate,
   fetchWorkspaceSettings,
   importDataset,
   listBenchmarkPlans,
@@ -12,6 +14,7 @@ import {
   listEngineModels,
   listEngineProfiles,
   listMachineProfiles,
+  listUseCasePresets,
   listWorkloads,
   preflightBenchmarkPlan,
   preflightSavedPlan,
@@ -24,12 +27,34 @@ import {
   type EngineModel,
   type EngineProfile,
   type MachineProfile,
+  type PrefillEstimate,
+  type QualityChecks,
+  type RunTargets,
+  type UseCasePreset,
   type Workload,
   type WorkloadInput,
   type WorkspaceSettingsResponse,
 } from "../lib/api";
 import { engineIdFromHash } from "../lib/engine-onboarding";
+import {
+  EMPTY_QUALITY,
+  EMPTY_TARGETS,
+  LARGE_CONTEXT_TOKENS,
+  formToQualityChecks,
+  formToTargets,
+  targetsToForm,
+  type QualityForm,
+  type TargetsForm,
+} from "../lib/targets-form";
 import { visibleEngines } from "../lib/test-fixtures";
+import { RepeatLaunchControl } from "./RepeatLaunchControl";
+import {
+  PrefillEstimateNote,
+  QualityChecksEditor,
+  TargetsEditor,
+  TargetsSummary,
+  UseCaseCards,
+} from "./WorkloadTargets";
 
 type ScreenData = {
   engines: EngineProfile[];
@@ -38,6 +63,7 @@ type ScreenData = {
   workloads: Workload[];
   plans: BenchmarkPlan[];
   settings: WorkspaceSettingsResponse | null;
+  useCases: UseCasePreset[];
 };
 
 type WorkloadForm = {
@@ -74,7 +100,12 @@ type PlanInput = {
   model_artifact_id: string;
   workload_id: string;
   retain_prompt_output: boolean;
+  targets: RunTargets | null;
 };
+
+/** Saved plans carry targets once the API supports them; older plans have none. */
+type PlanWithTargets = BenchmarkPlan & { targets?: RunTargets | null };
+type WorkloadWithChecks = Workload & { quality_checks?: QualityChecks | null };
 
 const PRESETS = [
   { value: "", label: "Custom workload", kind: "chat" as const, traffic: "closed_loop" as const },
@@ -114,6 +145,19 @@ const PRESETS = [
     kind: "completion" as const,
     traffic: "closed_loop" as const,
   },
+  ...[
+    ["interactive_chat", "Use case · Interactive chat"],
+    ["coding_assistant", "Use case · Coding assistant"],
+    ["document_qa", "Use case · Document Q&A / RAG"],
+    ["batch_summarization", "Use case · Batch summarization"],
+    ["long_context_stress", "Use case · Long context stress"],
+    ["quality_smoke", "Use case · Quality smoke"],
+  ].map(([value, label]) => ({
+    value: value!,
+    label: label!,
+    kind: "chat" as const,
+    traffic: "closed_loop" as const,
+  })),
 ];
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 256;
@@ -164,7 +208,7 @@ function formatEstimate(value: number | null, suffix: string) {
 }
 
 async function fetchScreenData(): Promise<ScreenData> {
-  const [engines, machines, datasets, workloads, plans, settings] = await Promise.all([
+  const [engines, machines, datasets, workloads, plans, settings, useCases] = await Promise.all([
     listEngineProfiles(),
     listMachineProfiles(),
     listDatasets(),
@@ -172,8 +216,10 @@ async function fetchScreenData(): Promise<ScreenData> {
     listBenchmarkPlans(),
     // Settings only adjust defaults; the builder still works with built-in defaults without them.
     fetchWorkspaceSettings().catch(() => null),
+    // Use-case cards are optional; the builder works without them.
+    listUseCasePresets().catch(() => [] as UseCasePreset[]),
   ]);
-  return { engines, machines, datasets, workloads, plans, settings };
+  return { engines, machines, datasets, workloads, plans, settings, useCases };
 }
 
 /** Engines offered for new plans; test fixtures stay hidden unless Settings enables them. */
@@ -239,6 +285,13 @@ export function WorkloadsScreen() {
   const [contentionAcknowledged, setContentionAcknowledged] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [runContended, setRunContended] = useState(false);
+  const [targetsForm, setTargetsForm] = useState<TargetsForm>(EMPTY_TARGETS);
+  const [targetErrors, setTargetErrors] = useState<Partial<Record<keyof TargetsForm, string>>>({});
+  const [qualityForm, setQualityForm] = useState<QualityForm>(EMPTY_QUALITY);
+  const [prefill, setPrefill] = useState<{ key: string; estimate: PrefillEstimate | null }>({
+    key: "",
+    estimate: null,
+  });
 
   const reloadData = useCallback(async () => {
     try {
@@ -323,10 +376,50 @@ export function WorkloadsScreen() {
     };
   }, [form.engineId]);
 
+  const plannedInputTokens =
+    form.source === "synthetic" && form.inputTokens.trim() ? Number(form.inputTokens) : 0;
+  const prefillKey =
+    form.engineId && plannedInputTokens >= LARGE_CONTEXT_TOKENS
+      ? `${form.engineId}:${form.modelId}:${plannedInputTokens}`
+      : "";
+
+  // Big contexts: estimate the first-token wait from prompt-processing rates of earlier runs.
+  useEffect(() => {
+    if (!prefillKey) return;
+    let active = true;
+    const [engineId, modelId, tokens] = prefillKey.split(":");
+    fetchPrefillEstimate({
+      engineProfileId: engineId!,
+      modelArtifactId: modelId || null,
+      inputTokens: Number(tokens),
+    }).then(
+      (estimate) => {
+        if (active) setPrefill({ key: prefillKey, estimate });
+      },
+      () => {
+        if (active) setPrefill({ key: prefillKey, estimate: null });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [prefillKey]);
+  const prefillEstimate = prefillKey && prefill.key === prefillKey ? prefill.estimate : null;
+  const selectedUseCase = data?.useCases.find((item) => item.preset === form.preset) ?? null;
+  const ttftTargetSeconds = targetsForm.ttftP50Seconds.trim()
+    ? Number(targetsForm.ttftP50Seconds)
+    : null;
+
   const models = modelResource.engineId === form.engineId ? modelResource.models : [];
   const modelsError = modelResource.engineId === form.engineId ? modelResource.error : null;
   const selectedModel = models.find((model) => model.id === form.modelId) ?? null;
   const chosenDataset = data?.datasets.find((dataset) => dataset.id === form.datasetId) ?? null;
+  // Exact match needs expected answers: the built-in smoke set or a dataset with an answer field.
+  const exactMatchAvailable =
+    form.preset === "quality_smoke" ||
+    (form.source === "dataset" &&
+      (chosenDataset === null || Boolean(chosenDataset.expected_answer_field)) &&
+      (Boolean(chosenDataset) || Boolean(answerField.trim())));
   const highRiskWarnings = (preflight?.warnings ?? []).filter((issue) =>
     /high_concurrency|concurrency_capacity_unknown|memory|large_context/.test(issue.code),
   );
@@ -385,7 +478,34 @@ export function WorkloadsScreen() {
       });
   }
 
+  function applyUseCase(useCase: UseCasePreset) {
+    setForm((current) => ({
+      ...current,
+      name: current.name === INITIAL_FORM.name ? `${useCase.title} check` : current.name,
+      preset: useCase.preset,
+      kind: "chat",
+      trafficMode: "closed_loop",
+      source: useCase.uses_builtin_dataset ? "synthetic" : current.source,
+      inputTokens: useCase.input_tokens === null ? "" : String(useCase.input_tokens),
+      outputTokens: String(useCase.output_tokens),
+      maxOutputTokens: String(useCase.output_tokens),
+      concurrency: String(useCase.concurrency),
+      requestCount: String(useCase.request_count),
+      durationSeconds: "",
+    }));
+    setTargetsForm(targetsToForm(useCase.default_targets));
+    setTargetErrors({});
+    setQualityForm(
+      useCase.uses_builtin_dataset ? { ...EMPTY_QUALITY, exactMatch: true } : EMPTY_QUALITY,
+    );
+  }
+
   function onPresetChange(event: ChangeEvent<HTMLSelectElement>) {
+    const useCase = data?.useCases.find((item) => item.preset === event.target.value);
+    if (useCase) {
+      applyUseCase(useCase);
+      return;
+    }
     const preset = PRESETS.find((item) => item.value === event.target.value) ?? PRESETS[0]!;
     const defaultSizing: Record<string, [input: number, output: number]> = {
       fixed_prefill: [1024, 32],
@@ -457,6 +577,16 @@ export function WorkloadsScreen() {
         setFieldErrors({ request_count: "Set a request limit, a duration, or both." });
         return;
       }
+      const parsedTargets = formToTargets(targetsForm);
+      setTargetErrors(parsedTargets.errors);
+      if (Object.keys(parsedTargets.errors).length > 0) {
+        setFieldErrors({ targets: "Fix the highlighted targets." });
+        return;
+      }
+      const qualityChecks = formToQualityChecks({
+        ...qualityForm,
+        exactMatch: qualityForm.exactMatch && exactMatchAvailable,
+      });
 
       const requestCount = form.requestCount.trim() ? Number(form.requestCount) : null;
       const durationSeconds = form.durationSeconds.trim() ? Number(form.durationSeconds) : null;
@@ -469,7 +599,7 @@ export function WorkloadsScreen() {
         .map((value) => Number(value.trim()))
         .filter((value) => Number.isInteger(value) && value > 0);
       const selectedDataset = data?.datasets.find((item) => item.id === datasetId) ?? null;
-      const workloadInput: WorkloadInput = {
+      const workloadInput: WorkloadInput & { quality_checks: QualityChecks | null } = {
         name: form.name.trim(),
         kind: form.kind,
         input_mode: form.source,
@@ -501,8 +631,24 @@ export function WorkloadsScreen() {
             ? (selectedDataset?.shuffle_seed ?? Number(shuffleSeed))
             : Number(form.randomSeed),
         sampling_config: samplingConfig,
+        quality_checks: qualityChecks,
       };
-      const createdWorkload = await createWorkload(workloadInput);
+      // Quality smoke replays a built-in dataset the server prepares, so it uses the preset route.
+      const createdWorkload =
+        form.preset === "quality_smoke"
+          ? await createUseCaseWorkload({
+              name: workloadInput.name,
+              preset: "quality_smoke",
+              request_count: requestCount,
+              duration_seconds: durationSeconds,
+              concurrency: workloadInput.concurrency,
+              warmup_count: workloadInput.warmup_count,
+              max_output_tokens: workloadInput.max_output_tokens,
+              random_seed: Number(form.randomSeed),
+              sampling_config: samplingConfig,
+              quality_checks: qualityChecks,
+            })
+          : await createWorkload(workloadInput);
       setWorkload(createdWorkload);
       const nextPlanInput: PlanInput = {
         name: form.name.trim(),
@@ -511,6 +657,7 @@ export function WorkloadsScreen() {
         model_artifact_id: form.modelId,
         workload_id: createdWorkload.id,
         retain_prompt_output: form.retainPromptOutput,
+        targets: parsedTargets.targets,
       };
       const checked = await preflightBenchmarkPlan(nextPlanInput);
       setPlanInput(nextPlanInput);
@@ -567,6 +714,7 @@ export function WorkloadsScreen() {
         model_artifact_id: plan.model_artifact_id ?? "",
         workload_id: plan.workload_id,
         retain_prompt_output: plan.retain_prompt_output,
+        targets: (plan as PlanWithTargets).targets ?? null,
       });
       setWorkload(data?.workloads.find((item) => item.id === plan.workload_id) ?? null);
       setPreflight(checked);
@@ -734,6 +882,18 @@ export function WorkloadsScreen() {
               </div>
             )}
             <form className="workload-form" onSubmit={(event) => void onSubmitWorkload(event)}>
+              <UseCaseCards
+                onSelect={applyUseCase}
+                selected={form.preset}
+                useCases={data?.useCases ?? []}
+              />
+              {selectedUseCase?.uses_builtin_dataset && (
+                <p className="workload-note" role="note">
+                  Quality smoke sends 20 short arithmetic, capital-city, and JSON questions with
+                  known answers from a built-in set and checks each answer exactly. The request
+                  source and input size below are not used.
+                </p>
+              )}
               <fieldset className="workload-fieldset">
                 <legend>Target</legend>
                 <div className="workload-grid">
@@ -1239,6 +1399,14 @@ export function WorkloadsScreen() {
                           </small>
                         )}
                       </label>
+                      <PrefillEstimateNote
+                        estimate={prefillEstimate}
+                        ttftTargetSeconds={
+                          ttftTargetSeconds !== null && Number.isFinite(ttftTargetSeconds)
+                            ? ttftTargetSeconds
+                            : null
+                        }
+                      />
                     </>
                   ) : (
                     <div className="workload-note workload-field--wide">
@@ -1369,6 +1537,43 @@ export function WorkloadsScreen() {
                   </label>
                 </div>
               </fieldset>
+
+              <TargetsEditor
+                canReset={Boolean(selectedUseCase)}
+                errors={targetErrors}
+                form={targetsForm}
+                onChange={(key, value) => {
+                  setTargetsForm((current) => ({ ...current, [key]: value }));
+                  setTargetErrors((current) => {
+                    const next = { ...current };
+                    delete next[key];
+                    return next;
+                  });
+                }}
+                onClear={() => {
+                  setTargetsForm(EMPTY_TARGETS);
+                  setTargetErrors({});
+                }}
+                onReset={() => {
+                  if (selectedUseCase)
+                    setTargetsForm(targetsToForm(selectedUseCase.default_targets));
+                  setTargetErrors({});
+                }}
+              />
+              <QualityChecksEditor
+                exactMatchAvailable={exactMatchAvailable}
+                exactMatchNote={
+                  form.preset === "quality_smoke"
+                    ? "Uses the built-in expected answers."
+                    : form.source !== "dataset"
+                      ? "Needs an imported dataset with an expected-answer field."
+                      : chosenDataset && !chosenDataset.expected_answer_field
+                        ? "This dataset has no expected-answer field."
+                        : null
+                }
+                form={qualityForm}
+                onChange={setQualityForm}
+              />
 
               <div className="workload-actions">
                 <button className="button button--primary" disabled={busy || !data} type="submit">
@@ -1512,6 +1717,17 @@ export function WorkloadsScreen() {
                     </div>
                   </dl>
                 </section>
+                <TargetsSummary targets={planInput?.targets ?? null} />
+                {(workload as WorkloadWithChecks | null)?.quality_checks && (
+                  <section className="preflight-card" aria-label="Quality checks">
+                    <h3>Quality checks</h3>
+                    <p>
+                      {qualityChecksSummary(
+                        (workload as WorkloadWithChecks).quality_checks as QualityChecks,
+                      )}
+                    </p>
+                  </section>
+                )}
               </div>
               <div className="preflight-grid preflight-grid--lists">
                 <IssueList
@@ -1634,6 +1850,13 @@ export function WorkloadsScreen() {
                         : "Launch benchmark"}
                   </button>
                 )}
+                {savedPlan && activePlan && (
+                  <RepeatLaunchControl
+                    planId={activePlan.id}
+                    disabled={busy || !canLaunch}
+                    onRunStarted={(run) => setRunId(run.id)}
+                  />
+                )}
                 {savedPlan && !canLaunch && preflight.valid && (
                   <span className="workload-action-hint">
                     {hasContentionWarning && !contentionAcknowledged
@@ -1687,6 +1910,24 @@ function RequestTimeoutHint({
       )}
     </span>
   );
+}
+
+function qualityChecksSummary(checks: QualityChecks): string {
+  const parts: string[] = [];
+  if (checks.exact_match) parts.push("exact match with expected answers");
+  if (checks.valid_json)
+    parts.push(
+      checks.json_required_keys.length
+        ? `valid JSON with keys ${checks.json_required_keys.join(", ")}`
+        : "valid JSON",
+    );
+  if (checks.stopped_properly) parts.push("stopped before the token limit");
+  if (checks.max_output_characters !== null)
+    parts.push(`at most ${checks.max_output_characters} characters`);
+  if (checks.must_contain.length) parts.push(`contains ${checks.must_contain.join(", ")}`);
+  if (checks.must_not_contain.length)
+    parts.push(`does not contain ${checks.must_not_contain.join(", ")}`);
+  return `Each output is checked for: ${parts.join("; ")}. Only pass/fail and reasons are stored.`;
 }
 
 function FieldError({ id, message }: { id: string; message: string }) {
